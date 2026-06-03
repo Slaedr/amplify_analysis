@@ -1,0 +1,16 @@
+{
+  "nx": 256,
+  "ny": 256,
+  "nz": 256,
+  "executor": "cuda",
+  "amp_base_format": "ell",
+  "warmup_reps": 3,
+  "bench_reps": 20,
+  "solver_reps": 5,
+  "amp_tolerance": 1e-8,
+  "gmres_tol": 1e-10,
+  "gmres_max_iters": 1000,
+  "gmres_krylov_dim": 50,
+  "matrix_values_type": "general",
+  "output_file_prefix": ""
+}
