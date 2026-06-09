@@ -12,9 +12,10 @@ Job running and postprocessing scripts for AMPLify Ginkgo project experiments. T
 `GINKGO_BUILD_DIR`: The build directory where the Ginkgo build directory exists.
 
 ## Random stencil experiments
-Change the "`executor`" and "`amp_base_format`" in the input file config.json.
+Change the "`executor`" and "`amp_base_format`" fields in the input file config.json.
 
 ## Suitesparse experiments
-`RESULTS_DIR`: The directory to move results to.
-`SYSTEM_NAME`: Name of the system. Matters only for the reults directory structure.
-`EXECUTOR`: hip,cuda,omp or reference.
+Environment variables:
+- `RESULTS_DIR`: The directory to move results to.
+- `SYSTEM_NAME`: Name of the system. Matters only for the reults directory structure.
+- `EXECUTOR`: hip,cuda,omp or reference.
