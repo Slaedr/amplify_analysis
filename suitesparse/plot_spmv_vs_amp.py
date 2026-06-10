@@ -66,6 +66,8 @@ def main():
     base_times = np.array([r["base_time"] for r in records])
     amp_times = np.array([r["amp_time"] for r in records])
     amp_relative = base_times / amp_times
+    geometric_mean_speedup = np.exp(np.mean(np.log(amp_relative)))
+    print(f"Geometric mean speedup: {geometric_mean_speedup:.2f}x")
 
     x = np.arange(len(names))
     width = 0.35
@@ -85,8 +87,14 @@ def main():
     ax.set_xticks(x)
     ax.set_xticklabels(names, rotation=30, ha="right")
     ax.legend()
-    ax.bar_label(bars_base, fmt="%.2f", fontsize=7, padding=2)
-    ax.bar_label(bars_amp, fmt="%.2f", fontsize=7, padding=2)
+    speedup_label_kwargs = {
+        "fmt": "%.2f",
+        "fontsize": 12,
+        "padding": -4,
+        "color": "black",
+    }
+    ax.bar_label(bars_base, **speedup_label_kwargs)
+    ax.bar_label(bars_amp, **speedup_label_kwargs)
 
     fig.tight_layout()
     out_path = (args.output if args.output else
