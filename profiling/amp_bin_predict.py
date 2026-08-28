@@ -72,6 +72,7 @@ def read_mtx(path):
         return A.shape[0], A.shape[1], A.row.astype(np.int64), \
             A.col.astype(np.int64), v
     except Exception:
+        print("!! Scipy not available! Using Numpy to read mtx.")
         pass
     sym, field = "general", "real"
     with open(path, "r", errors="replace") as fh:
@@ -305,16 +306,16 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("matrices", nargs="+")
     ap.add_argument("--tol", action="append", type=float, default=None,
-                    help="AMP tolerance (repeatable); default 1e-14")
+                    help="AMP tolerance (repeatable); default 1e-9")
     ap.add_argument("--half", choices=["fp16", "bf16"], default="bf16",
                     help="narrowest bin type; bf16 if GINKGO_ENABLE_BFLOAT16=ON")
-    ap.add_argument("--tile", default="64,32,16,8,4",
-                    help="subwarp widths to evaluate [64,32,16,8,4]")
+    ap.add_argument("--tile", default="64,32",
+                    help="subwarp widths to evaluate [64,32]")
     ap.add_argument("--json", default=None)
     ap.add_argument("--csv", default=None)
     args = ap.parse_args()
 
-    tols = args.tol or [1e-14]
+    tols = args.tol or [1e-9]
     tiles = [int(t) for t in args.tile.split(",")]
     recs = []
     for m in args.matrices:

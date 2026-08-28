@@ -233,6 +233,29 @@ instead of the 1.6 TB/s spec figure (BabelStream typically lands around
 
 ---
 
+## Troubleshooting
+
+**`PermissionError: [Errno 13] Permission denied: .../benchmark/spmv`** from
+inside rocprofv3 — that path is a *directory*. In a Ginkgo build tree the
+binary is `<build>/benchmark/spmv/spmv`, and `run_all_benchmarks.sh` invokes it
+as `./spmv/spmv${BENCH_SUFFIX}`. The script resolves this itself now; if it
+still cannot find the binary it prints both paths it tried. Set
+`BENCHMARK_PRECISION` (`double` | `single` | `dcomplex` | `scomplex`) to pick
+among `spmv`, `spmv_single`, `spmv_dcomplex`, `spmv_scomplex` — same mapping as
+`run_all_benchmarks.sh`.
+
+**No counter CSV produced.** Check `pmc_<set>/stderr.log`. Usual causes: the
+GCD is shared with another process (counters need exclusive access — one rank,
+one GCD); the kernel-name filter matched nothing; or a counter in that group is
+not available on this agent. Run once with `--pmc-sets wave` to isolate, and
+drop `--no-validate` so the script checks names against
+`rocprofv3 --list-avail` first.
+
+**Flag spellings across ROCm versions.** The script probes `rocprofv3 --help`
+for `--output-directory` / `--output-file` and for whether kernel filtering is
+`--kernel-include-regex` or `--kernel-filter-include`, and adapts. If a future
+version renames something else, that probe is the place to extend.
+
 ## Device notes
 
 Counters are always **per agent**, and one MI250X exposes two agents. Every

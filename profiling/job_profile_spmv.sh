@@ -49,6 +49,7 @@ export AMP_TOLERANCE_TYPE="${AMP_TOLERANCE_TYPE:-componentwise}"
 export FORMATS="${FORMATS:-csr,amp}"
 export REPETITIONS="${REPETITIONS:-20}"
 export WARMUP="${WARMUP:-3}"
+export BENCHMARK_PRECISION="${BENCHMARK_PRECISION:-double}"
 export PROFILE_TOOL="${PROFILE_TOOL:-auto}"
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

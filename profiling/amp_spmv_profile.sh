@@ -38,6 +38,7 @@ AMP_BASE="${AMP_BASE_TYPE:-csr}"
 AMP_TOL="${AMP_TOLERANCE:-1e-9}"
 AMP_TOL_TYPE="${AMP_TOLERANCE_TYPE:-componentwise}"
 EXECUTOR="${EXECUTOR:-hip}"
+BENCH_PRECISION="${BENCHMARK_PRECISION:-double}"
 DEVICE_ID=0
 WARMUP="${WARMUP:-3}"
 REPS="${REPETITIONS:-20}"
@@ -61,6 +62,7 @@ Environment (same names as the other job scripts in this repo; flags override):
   EXECUTOR           hip | cuda                                    [hip]
   RESULTS_DIR        Where to put the run directory                [$PWD]
   SYSTEM_NAME        Tag for the results directory name            [unspecified]
+  BENCHMARK_PRECISION  double | single | dcomplex | scomplex        [double]
   AMP_BASE_TYPE / AMP_TOLERANCE / AMP_TOLERANCE_TYPE / FORMATS / REPETITIONS
 
 Required:
@@ -74,6 +76,8 @@ Workload:
   --amp-tolerance T      AMP tolerance                    [1e-9]
   --amp-tolerance-type T componentwise | normwise         [componentwise]
   --executor E           hip | cuda                       [hip]
+  --precision P          double | single | dcomplex | scomplex, selecting
+                         benchmark/spmv/spmv[_suffix]     [double]
   --device-id N          Ginkgo device id                 [0]
   --warmup N             Warmup reps                      [3]
   --repetitions N        Timed reps                       [20]
@@ -109,6 +113,7 @@ while [[ $# -gt 0 ]]; do
         --amp-tolerance)       AMP_TOL="$2"; shift 2 ;;
         --amp-tolerance-type)  AMP_TOL_TYPE="$2"; shift 2 ;;
         --executor)            EXECUTOR="$2"; shift 2 ;;
+        --precision)           BENCH_PRECISION="$2"; shift 2 ;;
         --device-id)           DEVICE_ID="$2"; shift 2 ;;
         --warmup)              WARMUP="$2"; shift 2 ;;
         --repetitions)         REPS="$2"; shift 2 ;;
@@ -129,8 +134,35 @@ done
 [[ -n "$BUILD_DIR" ]] || { usage; die "set GINKGO_BUILD_DIR or pass --build-dir"; }
 [[ -n "$OUTDIR" ]] || \
     OUTDIR="${RESULTS_DIR:-$PWD}/results-profile-spmv-${AMP_BASE}-${SYSTEM_NAME}"
-SPMV="$BUILD_DIR/benchmark/spmv"
-[[ -x "$SPMV" ]] || die "not executable: $SPMV"
+
+# Same BENCHMARK_PRECISION -> suffix mapping as benchmark/run_all_benchmarks.sh
+case "$BENCH_PRECISION" in
+    double)   BENCH_SUFFIX="" ;;
+    single)   BENCH_SUFFIX="_single" ;;
+    dcomplex) BENCH_SUFFIX="_dcomplex" ;;
+    scomplex) BENCH_SUFFIX="_scomplex" ;;
+    *) die "BENCHMARK_PRECISION is set to the not supported \"$BENCH_PRECISION\"."\
+"  Supported: double, single, dcomplex, scomplex" ;;
+esac
+
+# In a Ginkgo build tree the spmv binary lives in its own subdirectory:
+#   <build>/benchmark/spmv/spmv[_single|_dcomplex|_scomplex]
+# (run_all_benchmarks.sh invokes it as ./spmv/spmv${BENCH_SUFFIX}).  Accept the
+# flat layout too, in case a different generator puts it there.
+SPMV=""
+for cand in "$BUILD_DIR/benchmark/spmv/spmv$BENCH_SUFFIX" \
+            "$BUILD_DIR/benchmark/spmv$BENCH_SUFFIX"; do
+    if [[ -f "$cand" && -x "$cand" ]]; then SPMV="$cand"; break; fi
+done
+if [[ -z "$SPMV" ]]; then
+    die "could not find the spmv benchmark binary for BENCHMARK_PRECISION=$BENCH_PRECISION.
+  Looked for:
+    $BUILD_DIR/benchmark/spmv/spmv$BENCH_SUFFIX
+    $BUILD_DIR/benchmark/spmv$BENCH_SUFFIX
+  Note that <build>/benchmark/spmv is a *directory*; the executable is inside it.
+  Check GINKGO_BUILD_DIR ($BUILD_DIR) and that benchmarks were built."
+fi
+info "benchmark binary: $SPMV"
 
 if [[ -n "$MATRIX_LIST" ]]; then
     [[ -r "$MATRIX_LIST" ]] || die "cannot read --matrix-list $MATRIX_LIST"
@@ -217,6 +249,8 @@ cat > "$OUTDIR/device.json" <<EOF
   "num_compute_units": ${NUM_CU:-0},
   "system_name": "$SYSTEM_NAME",
   "executor": "$EXECUTOR",
+  "benchmark_precision": "$BENCH_PRECISION",
+  "spmv_binary": "$SPMV",
   "hostname": "$(hostname)",
   "rocm_path": "${ROCM_PATH:-}",
   "slurm_job_id": "${SLURM_JOB_ID:-}",
@@ -365,7 +399,8 @@ for mtx in "${MATRICES[@]}"; do
                     -k "$kre" --path "$cdir" \
                     -- "${ARGV[@]}" > "$cdir/profile.log" 2>&1
                 # analyze: speed-of-light, wavefront, instr mix, L1, L2, L2-fabric
-                wl="$(find "$cdir" -maxdepth 3 -type d -name 'MI*' 2>/dev/null | head -1)"
+                wl="$(find "$cdir" -maxdepth 4 -type d \
+                        \( -name 'MI*' -o -name 'gfx*' \) 2>/dev/null | head -1)"
                 if [[ -n "$wl" ]]; then
                     run "$RCOMP_BIN" analyze -p "$wl" \
                         > "$cdir/analyze_full.txt" 2>&1
