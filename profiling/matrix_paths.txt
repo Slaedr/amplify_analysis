@@ -1,0 +1,21 @@
+# One absolute .mtx path per line.  Blank lines and #-comments are ignored.
+#
+# These are FILE PATHS, not the bare SuiteSparse names used in
+# suitesparse/matrices.txt -- counter collection drives benchmark/spmv
+# directly rather than through run_all_benchmarks.sh, so it cannot resolve
+# names through ssget.
+#
+# To generate this list from matrices ssget has already downloaded (ssget
+# unpacks under $SSGET_ROOT_DIR, /tmp by default; run_all_benchmarks.sh may
+# point it elsewhere -- check `ssget -v` if these paths come up empty):
+#
+#   for m in $(grep -v '^\s*#' ../suitesparse/matrices.txt); do
+#       find "${SSGET_ROOT_DIR:-/tmp}" -name "$m.mtx" -print -quit
+#   done > matrix_paths.txt
+#
+# The current suitesparse/matrices.txt set, for reference:
+#   CoupCons3D  Geo_1438  ML_Laplace  Serena  ss1  HV15R  nv2
+#
+# Profiling is slow (one clean timing pass plus one pass per counter group,
+# per format, per matrix), so start with two or three matrices that the
+# static model says are interesting rather than the whole list.
