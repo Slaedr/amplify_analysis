@@ -36,7 +36,7 @@ export SOLVERS_MAX_ITERATIONS=10000
 export SOLVERS_RHS=1
 export SOLVERS_INITIAL_GUESS=0
 
-export AMP_BASE_TYPE=csr
+export AMP_BASE_TYPE=csrc
 export AMP_TOLERANCE_TYPE=componentwise
 export AMP_TOLERANCE=1e-8
 

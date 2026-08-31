@@ -18,8 +18,8 @@ fi
 
 export BENCHMARK=spmv
 export MATRIX_LIST_FILE=matrices.txt
-export AMP_BASE_TYPE=csr
-export FORMATS=amp
+export AMP_BASE_TYPE=csrc
+export FORMATS=csrc,amp
 export AMP_TOLERANCE_TYPE=componentwise
 export AMP_TOLERANCE=1e-9
 export BENCHMARK_PRECISION=double
