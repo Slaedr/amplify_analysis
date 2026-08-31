@@ -244,12 +244,81 @@ still cannot find the binary it prints both paths it tried. Set
 among `spmv`, `spmv_single`, `spmv_dcomplex`, `spmv_scomplex` — same mapping as
 `run_all_benchmarks.sh`.
 
-**No counter CSV produced.** Check `pmc_<set>/stderr.log`. Usual causes: the
-GCD is shared with another process (counters need exclusive access — one rank,
-one GCD); the kernel-name filter matched nothing; or a counter in that group is
-not available on this agent. Run once with `--pmc-sets wave` to isolate, and
-drop `--no-validate` so the script checks names against
-`rocprofv3 --list-avail` first.
+**`no counter CSV produced for set '<x>'`.** The script now recovers from this
+by itself: it retries the group one counter at a time, keeps everything that
+works, prints the offending names, and appends them to
+`unavailable_counters.txt` at the top of the results directory. The first few
+error lines from the failed group are echoed into stdout too, so a Slurm output
+file is enough to diagnose it. `amp_spmv_report.py` merges the per-counter CSVs
+(`pmc_<set>/single_<counter>/`) back together, so a partially-recovered group is
+as good as one that fitted in a single pass.
+
+Two causes, both handled:
+
+* *One counter is not available on this agent.* Counter names move between ROCm
+  releases. Name validation runs first when `rocprofv3` can enumerate counters
+  (`--list-avail` / `--list-metrics` / `--list-counters` — the script tries each
+  and says so loudly if none work).
+* *Too many counters for one hardware pass.* The SQ block has few counter
+  slots, and recent rocprofiler versions error out rather than multiplexing.
+  SQ groups are therefore capped at four counters each.
+
+**A counter group that fails silently.** If `stderr.log` shows no error at all,
+the app running to completion, and then `output generation :: 0.00x sec`,
+rocprofv3 captured **zero dispatches** and wrote nothing. The usual cause is a
+kernel-name filter that matched nothing: `--kernel-include-regex` is matched
+against the *whole* demangled name, so `csr_amp_basic_spmv` does not match
+`void gko::kernels::hip::amp::csr_amp_basic_spmv<double, ...>(...)`. This is why
+collection runs **unfiltered by default** — the report picks the SpMV kernel out
+of the CSV afterwards. `--kernel` is opt-in and its argument is wrapped in
+`.*(...).*` automatically.
+
+**Which kernel is "the" SpMV.** Not a fixed name. `--formats=csr` is Ginkgo's
+CSR with the **`automatical` strategy**, so the kernel it dispatches depends on
+the matrix. From `common/cuda_hip/matrix/csr_kernels.template.cpp`:
+
+| strategy | kernels per SpMV |
+| --- | --- |
+| load-balance | `abstract_spmv` |
+| classical | `abstract_classical_spmv` |
+| merge-path | `abstract_merge_path_spmv` **+** `abstract_reduce` |
+
+There is no `abstract_load_balance_spmv`. Only merge-path launches the trailing
+single-block `abstract_reduce`; for that strategy the two kernels' times and
+counters have to be added to get one SpMV.
+
+So the report does not match names. It selects by **dispatch count**:
+`benchmark/spmv` launches the SpMV `warmup + repetitions` times while setup,
+conversion and RHS kernels run once or twice, which identifies the SpMV kernels
+whatever strategy was chosen. `report.json` carries an `all_kernels` breakdown
+(name, dispatches, median and total time) so a multi-kernel baseline is never
+hidden, and `kernel_group` records what was summed. `--kernel` overrides it.
+
+**Consider profiling `csrc` as well as `csr`.** `csr` (automatical) is the
+honest performance baseline, but it may pick load-balance while AMP[CSR] is
+structurally a classical one-wavefront-per-row kernel — so a slowdown could be
+the *parallelisation strategy*, not the AMP format. `csrc` forces the classical
+strategy, matching AMP's shape, which separates the two effects:
+
+```sh
+--formats csr,csrc,amp     # csri = load-balance, csrm = merge-path, csrs = rocSPARSE
+```
+
+**Cost warning.** Each counter group is a separate `rocprofv3` invocation and
+therefore a separate `benchmark/spmv` process that re-reads the matrix from
+disk. With the default twelve groups that is 13 reads per format per matrix,
+and a per-counter fallback adds one more run per counter in the failed group.
+On a large matrix (HV15R and friends) matrix loading will dominate wall clock.
+Start small:
+
+```sh
+./amp_spmv_profile.sh --matrix-list one_small_matrix.txt \
+    --pmc-sets wave,l2,derived
+```
+
+`wave` + `l2` + `derived` already give lane utilisation, L2 hit rate, HBM bytes
+and occupancy — that is most of the diagnosis. Add the rest once the run is
+known to work end to end.
 
 **Flag spellings across ROCm versions.** The script probes `rocprofv3 --help`
 for `--output-directory` / `--output-file` and for whether kernel filtering is

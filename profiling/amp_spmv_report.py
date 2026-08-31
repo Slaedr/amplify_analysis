@@ -215,11 +215,20 @@ def derive(ctr, dev):
     # SQ_THREAD_CYCLES_VALU counts per-lane active cycles; SQ_ACTIVE_INST_VALU
     # counts wave-cycles in which a VALU instruction was active.  The ratio to
     # 64 is the fraction of lanes doing useful work.
-    d["VALUUtilization_pct"] = safe_div(
-        100.0 * (g("SQ_THREAD_CYCLES_VALU") or 0), (g("SQ_ACTIVE_INST_VALU") or 0) * WAVE
-    )
-    d["VALUBusy_pct"] = safe_div(100.0 * (g("SQ_ACTIVE_INST_VALU") or 0),
-                                 g("SQ_BUSY_CYCLES"))
+    # Prefer rocprofv3's own derived metric when it was collected: on releases
+    # where a raw SQ counter has been renamed or dropped it is the only way to
+    # get this number, and where both exist they agree.
+    d["VALUUtilization_pct"] = g("VALUUtilization")
+    if d["VALUUtilization_pct"] is None:
+        d["VALUUtilization_pct"] = safe_div(
+            100.0 * (g("SQ_THREAD_CYCLES_VALU") or 0),
+            (g("SQ_ACTIVE_INST_VALU") or 0) * WAVE)
+    else:
+        d["VALUUtilization_source"] = "rocprofv3-derived"
+    d["VALUBusy_pct"] = g("VALUBusy")
+    if d["VALUBusy_pct"] is None:
+        d["VALUBusy_pct"] = safe_div(100.0 * (g("SQ_ACTIVE_INST_VALU") or 0),
+                                     g("SQ_BUSY_CYCLES"))
     d["waves"] = g("SQ_WAVES")
     d["valu_insts_per_wave"] = safe_div(g("SQ_INSTS_VALU"), g("SQ_WAVES"))
     d["salu_insts_per_wave"] = safe_div(g("SQ_INSTS_SALU"), g("SQ_WAVES"))
@@ -231,7 +240,9 @@ def derive(ctr, dev):
     d["wave_wait_frac_pct"] = safe_div(100.0 * (g("SQ_WAIT_ANY") or 0),
                                        g("SQ_WAVE_CYCLES"))
     # rocprof's MeanOccupancyPerCU convention
-    if g("SQ_ACCUM_PREV_HIRES") is not None and g("GRBM_GUI_ACTIVE"):
+    d["mean_occupancy_per_cu"] = g("MeanOccupancyPerCU")
+    if d["mean_occupancy_per_cu"] is None and \
+            g("SQ_ACCUM_PREV_HIRES") is not None and g("GRBM_GUI_ACTIVE"):
         d["mean_occupancy_per_cu"] = (g("SQ_ACCUM_PREV_HIRES")
                                       / g("GRBM_GUI_ACTIVE"))
     d["gpu_busy_pct"] = safe_div(100.0 * (g("GRBM_GUI_ACTIVE") or 0), g("GRBM_COUNT"))
@@ -250,14 +261,21 @@ def derive(ctr, dev):
     if hit is not None and ms is not None and (hit + ms) > 0:
         d["L2_hit_pct"] = 100.0 * hit / (hit + ms)
         d["L2_requests"] = hit + ms
+    elif g("L2CacheHit") is not None:
+        d["L2_hit_pct"] = g("L2CacheHit")
     rd, rd32 = g("TCC_EA_RDREQ_sum"), g("TCC_EA_RDREQ_32B_sum")
     if rd is not None:
         rd32 = rd32 or 0.0
         d["hbm_read_bytes"] = rd32 * 32 + (rd - rd32) * 64
+    elif g("FetchSize") is not None:
+        d["hbm_read_bytes"] = g("FetchSize") * 1024.0     # rocprof reports KB
     wr, wr64 = g("TCC_EA_WRREQ_sum"), g("TCC_EA_WRREQ_64B_sum")
     if wr is not None:
         wr64 = wr64 or 0.0
         d["hbm_write_bytes"] = wr64 * 64 + (wr - wr64) * 32
+    elif g("WriteSize") is not None:
+        d["hbm_write_bytes"] = g("WriteSize") * 1024.0
+    d["MemUnitStalled_pct"] = g("MemUnitStalled")
     if d.get("hbm_read_bytes") is not None:
         d["hbm_bytes"] = d["hbm_read_bytes"] + (d.get("hbm_write_bytes") or 0.0)
     d["L2_tag_stall"] = g("TCC_TAG_STALL_sum")
@@ -313,6 +331,11 @@ def collect(outdir, skip_dispatches, kernel_hint=None):
     if os.path.exists(dj):
         with open(dj) as fh:
             dev_meta = json.load(fh)
+    expected = None
+    try:
+        expected = int(dev_meta.get("warmup", 0)) + int(dev_meta.get("repetitions", 0))
+    except (TypeError, ValueError):
+        pass
 
     for mdir in sorted(d for d in glob.glob(os.path.join(outdir, "*"))
                        if os.path.isdir(d)):
@@ -323,60 +346,116 @@ def collect(outdir, skip_dispatches, kernel_hint=None):
             rec = {"matrix": matrix, "format": fmt, "counters": {},
                    "static": {}, "kernel": None}
 
-            # timing
+            # ---- timing: keep EVERY kernel, choose afterwards
+            dur_all, kinfo_all = {}, {}
             for tr in _find(os.path.join(fdir, "timing"), "*kernel_trace.csv"):
                 dur, kinfo = read_kernel_trace(tr)
-                cand = _pick_kernel(dur.keys(), fmt, kernel_hint)
-                if cand:
-                    ds = dur[cand][skip_dispatches:] or dur[cand]
-                    rec["kernel"] = cand
-                    rec["time_ns_median"] = med(ds)
-                    rec["time_ns_min"] = min(ds) if ds else None
-                    rec["dispatches"] = len(dur[cand])
-                    rec["static"].update(kinfo.get(cand, {}))
-                break
+                dur_all.update(dur)
+                kinfo_all.update(kinfo)
 
             bj = os.path.join(fdir, "timing", "bench.json")
             if os.path.exists(bj):
                 rec["bench"] = read_bench_json(bj)
 
-            # counters
+            # ---- counters: merge every CSV under every pmc_* directory.
+            # A group that failed as a whole and was retried counter-by-counter
+            # leaves one CSV per counter in pmc_<set>/single_<counter>/; those
+            # are just as good as one combined file.
+            ctr_all = defaultdict(dict)
+            static_all = defaultdict(dict)
             for pdir in sorted(glob.glob(os.path.join(fdir, "pmc_*"))):
                 setname = os.path.basename(pdir)[4:]
+                got = False
                 for cf in _find(pdir, "*counter_collection.csv"):
                     per_kern, static = read_counter_csv(cf)
-                    cand = _pick_kernel(per_kern.keys(), fmt, kernel_hint) \
-                        or rec["kernel"]
-                    if not cand or cand not in per_kern:
-                        continue
-                    rec["kernel"] = rec["kernel"] or cand
-                    for c, vals in per_kern[cand].items():
-                        v = vals[skip_dispatches:] or vals
-                        rec["counters"][c] = med(v)
-                    rec["static"].update(static.get(cand, {}))
+                    for kern, ctrs in per_kern.items():
+                        for c, vals in ctrs.items():
+                            v = vals[skip_dispatches:] or vals
+                            ctr_all[kern][c] = med(v)
+                            got = True
+                        static_all[kern].update(static.get(kern, {}))
+                if got:
                     rec.setdefault("pmc_sets", []).append(setname)
-                    break
+
+            # ---- which kernels make up ONE SpMV?
+            group = _select_kernel_group(dur_all, ctr_all, fmt, kernel_hint,
+                                         expected)
+            rec["kernel"] = " + ".join(group) if group else None
+            rec["kernel_group"] = group
+
+            # Some strategies need more than one kernel per SpMV: merge-path is
+            # abstract_merge_path_spmv + abstract_reduce (the latter a single
+            # block that finishes the partial sums).  Load-balance
+            # (abstract_spmv) and classical (abstract_classical_spmv) are one
+            # kernel each.  Whatever the group turns out to be, its times and
+            # counters add.
+            times, disp = [], []
+            for k in group:
+                ds = (dur_all.get(k) or [])[skip_dispatches:] \
+                     or dur_all.get(k) or []
+                if ds:
+                    times.append(statistics.median(ds))
+                    disp.append(len(dur_all[k]))
+                for c, v in ctr_all.get(k, {}).items():
+                    rec["counters"][c] = rec["counters"].get(c, 0.0) + (v or 0.0)
+                rec["static"].update(static_all.get(k, {}))
+                rec["static"].update(kinfo_all.get(k, {}))
+            if times:
+                rec["time_ns_median"] = sum(times)
+                rec["dispatches"] = max(disp) if disp else None
+
+            # full breakdown, so a multi-kernel baseline is never hidden
+            rec["all_kernels"] = sorted(
+                ({"name": k, "dispatches": len(v),
+                  "median_ns": med(v[skip_dispatches:] or v),
+                  "total_ns": sum(v)} for k, v in dur_all.items()),
+                key=lambda e: -(e["total_ns"] or 0))[:12]
             results.append(rec)
     return dev_meta, results
 
 
-def _pick_kernel(names, fmt, hint):
-    names = [n for n in names if n]
+def _select_kernel_group(dur_all, ctr_all, fmt, hint, expected):
+    """Names of the kernels that together constitute one SpMV.
+
+    The discriminator that actually works is dispatch count: benchmark/spmv
+    launches the SpMV (warmup + repetitions) times, while setup, conversion and
+    RHS kernels run once or twice.  This is strategy-agnostic, which matters
+    because --formats=csr uses Ginkgo's 'automatical' strategy and so the
+    kernel depends on the matrix:
+
+        load-balance : abstract_spmv                                (1 kernel)
+        classical    : abstract_classical_spmv                      (1 kernel)
+        merge-path   : abstract_merge_path_spmv + abstract_reduce   (2 kernels)
+
+    (There is no 'abstract_load_balance_spmv'.)  Only merge-path needs the
+    trailing abstract_reduce; when a strategy does not launch it, it simply
+    never appears in the trace and the group is a single kernel.
+    """
+    names = [n for n in (dur_all or ctr_all) if n]
     if not names:
-        return None
-    pats = []
+        return []
     if hint:
-        pats.append(hint)
-    if fmt == "amp":
-        pats += [r"csr_amp_.*spmv", r"ell_amp_.*spmv", r"amp.*spmv"]
-    pats += [r"spmv"]
-    for p in pats:
-        m = [n for n in names if re.search(p, n, re.I)]
+        m = [n for n in names if re.search(hint, n, re.I)]
         if m:
-            # longest-running kernels tend to be the ones we want; without
-            # durations here, prefer the one whose name matches most tightly.
-            return sorted(m, key=len)[0]
-    return None
+            return sorted(m)
+
+    counts = {n: len(dur_all.get(n, [])) for n in names}
+    cands = names
+    if expected and dur_all:
+        lo = max(2, int(expected * 0.7))
+        rep = [n for n in names if counts.get(n, 0) >= lo]
+        if rep:
+            cands = rep
+
+    if fmt == "amp":
+        amp = [n for n in cands if re.search(r"amp_.*spmv|amp.*spmv", n, re.I)]
+        if amp:
+            return sorted(amp)
+    spmvish = [n for n in cands
+               if re.search(r"spmv|abstract_reduce", n, re.I)]
+    if spmvish:
+        return sorted(spmvish)
+    return sorted(cands)
 
 
 # ------------------------------------------------------------------ report
@@ -425,7 +504,12 @@ def analyse(dev_meta, results, peak_bw, achievable_frac, peak_fp64, dev_name):
         tm = traffic_model(nrows, nnz, bins) if (nrows and nnz and bins) else {}
 
         row = dict(rec_matrix=rec["matrix"], rec_format=rec["format"],
-                   kernel=rec.get("kernel"), rows=nrows, nnz=nnz,
+                   kernel=rec.get("kernel"),
+                   kernel_group=rec.get("kernel_group"),
+                   all_kernels=rec.get("all_kernels"),
+                   pmc_sets=rec.get("pmc_sets"),
+                   dispatches=rec.get("dispatches"),
+                   rows=nrows, nnz=nnz,
                    time_us=(t_s * 1e6) if t_s else None)
         row.update(d)
         row.update({f"model_{k}": v for k, v in tm.items()})

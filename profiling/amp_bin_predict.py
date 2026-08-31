@@ -32,8 +32,8 @@ and then answers four questions per matrix, before you burn a node-hour:
      wider than in plain CSR.  Reports mean column-index gap per bin.
 
 Usage:
-  python3 amp_bin_predict.py A.mtx [B.mtx ...] --tol 1e-14 [--tol 1e-10 ...]
-                             [--half fp16|bf16] [--tile 64,32,16,8]
+  python3 amp_bin_predict.py A.mtx [B.mtx ...] --tol 1e-9 [--tol 1e-10 ...]
+                             [--half fp16|bf16] [--tile 64,32,16]
                              [--json out.json] [--csv out.csv]
 """
 

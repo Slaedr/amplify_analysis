@@ -82,7 +82,11 @@ Workload:
   --warmup N             Warmup reps                      [3]
   --repetitions N        Timed reps                       [20]
   --system-name NAME     Tag used in the results directory name
-  --kernel REGEX         Kernel name filter; default is auto-chosen per format
+  --kernel REGEX         Restrict collection to kernels matching REGEX.
+                         OFF by default: rocprofv3 matches this against the
+                         whole demangled name, and a pattern that matches
+                         nothing yields zero dispatches, no CSV and NO ERROR.
+                         Whatever you pass is wrapped in .*(...).* for you.
 
 Profiling:
   --tool T               auto | rocprofv3 | rocprof-compute | both   [auto]
@@ -263,35 +267,118 @@ EOF
 info "device: ${GFX:-unknown}, ${NUM_CU:-?} CUs"
 
 # ---------------------------------------------------------------- counters ---
-# Six single-pass groups.  Kept small enough that gfx90a can retire each group
-# in one pass; if rocprofiler still reports multiplexing, split further.
+# Small single-pass groups.  The SQ block has few hardware counter slots and
+# newer rocprofiler versions ERROR OUT rather than multiplexing when a group
+# does not fit, so SQ counters are kept to four per group.  Groups are merged
+# back together by amp_spmv_report.py, so splitting further is always safe.
 declare -A PMC
 # (a) Wavefront / VALU lane utilisation -- tests the "64-wide wave per row is
-#     mostly idle" hypothesis directly.  VALUUtilization is the headline number.
-PMC[wave]="SQ_WAVES SQ_INSTS_VALU SQ_ACTIVE_INST_VALU SQ_THREAD_CYCLES_VALU SQ_INSTS_SALU SQ_INSTS_VMEM_RD SQ_INSTS_SMEM SQ_BUSY_CYCLES"
-# (b) Latency hiding: how much of a wave's life is spent waiting, and occupancy.
-PMC[stall]="SQ_WAVES SQ_WAVE_CYCLES SQ_WAIT_ANY SQ_BUSY_CYCLES SQ_ACCUM_PREV_HIRES GRBM_GUI_ACTIVE GRBM_COUNT"
-# (c) Vector L1 (TCP, 16 KB/CU).  Hit rate on the x-gather lives here.
-PMC[l1]="TCP_TOTAL_CACHE_ACCESSES_sum TCP_TCC_READ_REQ_sum TCP_TCC_WRITE_REQ_sum TCP_PENDING_STALL_CYCLES_sum TCP_TCP_TA_DATA_STALL_CYCLES"
-# (d) L2 (TCC, 8 MB/GCD) + HBM bytes.  FetchSize/WriteSize are derived from EA.
-PMC[l2]="TCC_HIT_sum TCC_MISS_sum TCC_EA_RDREQ_sum TCC_EA_RDREQ_32B_sum TCC_EA_WRREQ_sum TCC_EA_WRREQ_64B_sum TCC_BUSY_sum TCC_TAG_STALL_sum"
-# (e) Scalar caches.  AMP[CSR] loads q row-pointer pairs per row through SMEM;
+#     mostly idle" hypothesis directly.  These four are exactly the inputs to
+#     VALUUtilization = 100 * SQ_THREAD_CYCLES_VALU / (SQ_ACTIVE_INST_VALU*64).
+PMC[wave]="SQ_WAVES SQ_INSTS_VALU SQ_ACTIVE_INST_VALU SQ_THREAD_CYCLES_VALU"
+# (b) Instruction mix per wave: scalar vs vector, and memory instruction counts.
+PMC[instmix]="SQ_INSTS_SALU SQ_INSTS_VMEM_RD SQ_INSTS_SMEM SQ_BUSY_CYCLES"
+# (c) Latency hiding: how much of a wave's life is spent waiting.
+PMC[stall]="SQ_WAVES SQ_WAVE_CYCLES SQ_WAIT_ANY SQ_BUSY_CYCLES"
+# (d) Occupancy.  SQ_ACCUM_PREV_HIRES is an accumulating counter and on some
+#     builds cannot share a pass with ordinary SQ counters -- hence its own set.
+PMC[occ]="SQ_ACCUM_PREV_HIRES GRBM_GUI_ACTIVE GRBM_COUNT"
+# (e) Vector L1 (TCP, 16 KB/CU).  Hit rate on the x-gather lives here.
+PMC[l1]="TCP_TOTAL_CACHE_ACCESSES_sum TCP_TCC_READ_REQ_sum TCP_TCC_WRITE_REQ_sum TCP_PENDING_STALL_CYCLES_sum"
+# (f) L2 (TCC, 8 MB/GCD) + HBM bytes.  FetchSize/WriteSize are derived from EA.
+PMC[l2]="TCC_HIT_sum TCC_MISS_sum TCC_EA_RDREQ_sum TCC_EA_RDREQ_32B_sum"
+PMC[l2w]="TCC_EA_WRREQ_sum TCC_EA_WRREQ_64B_sum TCC_BUSY_sum TCC_TAG_STALL_sum"
+# (g) Scalar caches.  AMP[CSR] loads q row-pointer pairs per row through SMEM;
 #     if the compiler scalarised them they show up here, not in TCP.
-PMC[scalar]="SQC_DCACHE_REQ SQC_DCACHE_HITS SQC_ICACHE_REQ SQC_ICACHE_HITS SQ_INSTS_SMEM"
-# (f) FP mix -- confirms how much real f64/f32 work is issued vs conversions.
-PMC[fp]="SQ_INSTS_VALU_ADD_F64 SQ_INSTS_VALU_MUL_F64 SQ_INSTS_VALU_FMA_F64 SQ_INSTS_VALU_ADD_F32 SQ_INSTS_VALU_MUL_F32 SQ_INSTS_VALU_FMA_F32 SQ_INSTS_VALU_CVT SQ_INSTS_VALU"
+PMC[scalar]="SQC_DCACHE_REQ SQC_DCACHE_HITS SQC_ICACHE_REQ SQC_ICACHE_HITS"
+# (h) FP mix -- confirms how much real f64/f32 work is issued vs conversions.
+PMC[fp]="SQ_INSTS_VALU_ADD_F64 SQ_INSTS_VALU_MUL_F64 SQ_INSTS_VALU_FMA_F64 SQ_INSTS_VALU"
+PMC[fp32]="SQ_INSTS_VALU_ADD_F32 SQ_INSTS_VALU_MUL_F32 SQ_INSTS_VALU_FMA_F32 SQ_INSTS_VALU_CVT"
+# (i) rocprofv3's own derived metrics.  Independent of the raw names above, so
+#     if a raw counter has been renamed in this ROCm release these still land.
+PMC[derived]="VALUUtilization VALUBusy MeanOccupancyPerCU"
+PMC[derived2]="L2CacheHit FetchSize WriteSize MemUnitStalled"
 
 if [[ "$PMC_SETS" == "all" ]]; then
-    SETS=(wave stall l1 l2 scalar fp)
+    SETS=(wave instmix stall occ l1 l2 l2w scalar fp fp32 derived derived2)
 else
     IFS=',' read -r -a SETS <<< "$PMC_SETS"
 fi
 
 AVAIL=""
 if [[ $VALIDATE_COUNTERS -eq 1 && $HAVE_RPV3 -eq 1 && $DRY_RUN -eq 0 ]]; then
-    info "querying available counters (rocprofv3 --list-avail)"
-    AVAIL="$(rocprofv3 --list-avail 2>/dev/null || true)"
+    # spelling of this flag has moved around between ROCm releases
+    for lf in --list-avail --list-metrics --list-counters; do
+        grep -q -- "$lf" <<<"$RPV3_HELP" || continue
+        info "querying available counters (rocprofv3 $lf)"
+        AVAIL="$(rocprofv3 "$lf" 2>/dev/null || true)"
+        [[ -n "$AVAIL" ]] && break
+    done
+    if [[ -z "$AVAIL" ]]; then
+        warn "could not enumerate available counters -- name validation is OFF."
+        warn "A counter this agent does not support will fail its whole group;"
+        warn "the per-counter fallback below will identify which one."
+    fi
 fi
+
+# show_err <logfile> -- put the interesting part of a rocprofv3 failure into the
+# job's stdout, so a Slurm output file is enough to diagnose it.
+show_err() {
+    [[ -r "$1" ]] || return 0
+    local n
+    n="$(grep -iEc 'error|invalid|not.*(found|support|avail)|exceed|fail' "$1" || true)"
+    if [[ "${n:-0}" -gt 0 ]]; then
+        grep -iE 'error|invalid|not.*(found|support|avail)|exceed|fail' "$1" \
+            | head -5 | sed 's/^/      | /' >&2
+        return 0
+    fi
+    # No error at all, yet no counter file.  If rocprofv3's own timing shows it
+    # ran the app and then generated output in ~no time, it captured zero
+    # dispatches.  That is what a kernel filter matching nothing looks like:
+    # exit 0, no diagnostic, no data.
+    if grep -q 'output generation' "$1" 2>/dev/null; then
+        warn "      rocprofv3 exited cleanly but generated no records --"
+        warn "      it profiled ZERO dispatches.  Almost always the kernel"
+        warn "      filter matched nothing (it must match the WHOLE demangled"
+        warn "      name).  Re-run without --kernel to collect all dispatches."
+    fi
+    tail -4 "$1" | sed 's/^/      | /' >&2
+}
+
+# pmc_attempt <outdir> <tag> <counters> <kernel-regex>
+# Returns 0 if a counter CSV landed, 1 otherwise.
+pmc_attempt() {
+    local pdir="$1" tag="$2" cnt="$3" kre="$4"
+    mkdir -p "$pdir"
+    # shellcheck disable=SC2086
+    if [[ -n "${RPV3_KFILTER:-}" && -n "$kre" ]]; then
+        run rocprofv3 --pmc $cnt "$RPV3_KFILTER" "$kre" \
+            --output-format csv \
+            "$RPV3_DIR_FLAG" "$pdir" "$RPV3_FILE_FLAG" "$tag" \
+            -- "${ARGV[@]}" > "$pdir/stdout.log" 2> "$pdir/stderr.log"
+    else
+        run rocprofv3 --pmc $cnt --output-format csv \
+            "$RPV3_DIR_FLAG" "$pdir" "$RPV3_FILE_FLAG" "$tag" \
+            -- "${ARGV[@]}" > "$pdir/stdout.log" 2> "$pdir/stderr.log"
+    fi
+    [[ $DRY_RUN -eq 1 ]] && return 0
+    found_csv "$pdir"
+}
+
+# found_csv <dir> -- did rocprofv3 leave a non-empty counter CSV anywhere under
+# here?  Uses find, not a glob: `**` only expands one level without globstar,
+# and different ROCm releases nest the output under <dir>/<pid>/ or
+# <dir>/<hostname>/<pid>/.  Falls back to any CSV carrying a Counter_Name
+# column, in case the file suffix changes again.
+found_csv() {
+    local d="$1" f
+    f="$(find "$d" -type f -name '*counter_collection.csv' -size +1c -print -quit 2>/dev/null)"
+    [[ -n "$f" ]] && return 0
+    while IFS= read -r f; do
+        head -1 "$f" 2>/dev/null | grep -q 'Counter_Name' && return 0
+    done < <(find "$d" -type f -name '*.csv' -size +1c 2>/dev/null)
+    return 1
+}
 
 filter_counters() {  # $1 = space separated list -> echoes surviving list
     local out=() c
@@ -306,13 +393,25 @@ filter_counters() {  # $1 = space separated list -> echoes surviving list
 }
 
 # --------------------------------------------------------------- benchmark ---
-default_kernel_re() {
-    case "$1" in
-        amp) [[ "$AMP_BASE" == "csr" ]] && echo "csr_amp_.*spmv" || echo "ell_amp_.*spmv" ;;
-        csr) echo "abstract_(classical|load_balance|merge_path)_spmv|csr_spmv" ;;
-        ell) echo "spmv_kernel|abstract_spmv" ;;
-        *)   echo "spmv" ;;
-    esac
+# Kernel filtering during collection is OFF by default, deliberately.
+#
+# rocprofv3's --kernel-include-regex is matched against the fully qualified,
+# demangled kernel name and (at least in ROCm 7.x) must match the WHOLE name,
+# not a substring.  A pattern like `csr_amp_basic_spmv` therefore matches
+# nothing against
+#   void gko::kernels::hip::amp::csr_amp_basic_spmv<double, double, ...>(...)
+# and rocprofv3 then profiles zero dispatches, writes no counter CSV, and exits
+# 0 with no error at all -- an entirely silent failure.
+#
+# Collecting every dispatch costs a little extra serialisation and nothing else:
+# amp_spmv_report.py picks the SpMV kernel out of the CSV by name afterwards.
+# --kernel is still available when you want to narrow it, and whatever you pass
+# gets wrapped in .* so substring patterns behave the way you expect.
+wrap_kernel_re() {
+    local re="$1"
+    [[ -z "$re" ]] && { echo ""; return; }
+    [[ "$re" == .\** ]] && { echo "$re"; return; }
+    echo ".*($re).*"
 }
 
 bench_argv() {  # $1 format, $2 matrix
@@ -343,10 +442,10 @@ for mtx in "${MATRICES[@]}"; do
     mname="$(basename "${mtx%.mtx}")"
     for fmt in "${FMT_ARR[@]}"; do
         done_n=$((done_n+1))
-        kre="${KERNEL_RE:-$(default_kernel_re "$fmt")}"
+        kre="$(wrap_kernel_re "$KERNEL_RE")"
         base="$OUTDIR/$mname/$fmt"
         mkdir -p "$base"
-        info "[$done_n/$total] $mname :: $fmt  (kernel filter: $kre)"
+        info "[$done_n/$total] $mname :: $fmt  (kernel filter: ${kre:-<none, all dispatches>})"
 
         mapfile -d '' -t ARGV < <(bench_argv "$fmt" "$mtx")
 
@@ -371,20 +470,31 @@ for mtx in "${MATRICES[@]}"; do
                 cnt="$(filter_counters "${PMC[$s]}")"
                 [[ -n "$cnt" ]] || { warn "pmc set '$s' empty after filtering"; continue; }
                 pdir="$base/pmc_$s"; mkdir -p "$pdir"
-                # shellcheck disable=SC2086
-                if [[ -n "${RPV3_KFILTER:-}" ]]; then
-                    run rocprofv3 --pmc $cnt "$RPV3_KFILTER" "$kre" \
-                        --output-format csv \
-                        "$RPV3_DIR_FLAG" "$pdir" "$RPV3_FILE_FLAG" "$s" \
-                        -- "${ARGV[@]}" > "$pdir/stdout.log" 2> "$pdir/stderr.log"
-                else
-                    run rocprofv3 --pmc $cnt --output-format csv \
-                        "$RPV3_DIR_FLAG" "$pdir" "$RPV3_FILE_FLAG" "$s" \
-                        -- "${ARGV[@]}" > "$pdir/stdout.log" 2> "$pdir/stderr.log"
+                if pmc_attempt "$pdir" "$s" "$cnt" "$kre"; then
+                    continue
                 fi
-                if [[ $DRY_RUN -eq 0 ]] && ! compgen -G "$pdir/**/*counter_collection.csv" >/dev/null \
-                   && ! compgen -G "$pdir/*counter_collection.csv" >/dev/null; then
-                    warn "no counter CSV produced for set '$s' -- see $pdir/stderr.log"
+                [[ $DRY_RUN -eq 1 ]] && continue
+
+                # The group failed as a whole.  Almost always this is either one
+                # counter this agent does not support, or too many counters for
+                # a single hardware pass.  Retry them one at a time so we keep
+                # whatever does work and learn exactly which name is the
+                # problem, instead of losing the entire group.
+                warn "pmc set '$s' failed as a group; retrying its $(wc -w <<<"$cnt") counters individually"
+                show_err "$pdir/stderr.log"
+                local_ok=""; local_bad=""
+                for c in $cnt; do
+                    sdir="$pdir/single_$c"; mkdir -p "$sdir"
+                    if pmc_attempt "$sdir" "$c" "$c" "$kre"; then
+                        local_ok="$local_ok $c"
+                    else
+                        local_bad="$local_bad $c"
+                    fi
+                done
+                [[ -n "$local_ok"  ]] && info "  '$s' recovered individually:$local_ok"
+                if [[ -n "$local_bad" ]]; then
+                    warn "  '$s' counters unavailable on this agent:$local_bad"
+                    printf '%s\n' $local_bad >> "$OUTDIR/unavailable_counters.txt"
                 fi
             done
         fi
