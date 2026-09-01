@@ -15,9 +15,12 @@ if [ ! -n "$SYSTEM_NAME" ]; then
     echo SYSTEM_NAME not set. Setting it to "unspecified".
 	export SYSTEM_NAME=unspecified
 fi
+if [ ! -n "$MATRIX_LIST_FILE" ]; then
+    echo MATRIX_LIST_FILE not set. Setting it to "matrices.txt".
+	export MATRIX_LIST_FILE=matrices.txt
+fi
 
 export BENCHMARK=spmv
-export MATRIX_LIST_FILE=matrices.txt
 export AMP_BASE_TYPE=csrc
 export FORMATS=csrc,amp
 export AMP_TOLERANCE_TYPE=componentwise

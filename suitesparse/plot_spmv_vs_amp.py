@@ -48,8 +48,8 @@ def main():
         default="results/GB10/cuda/SuiteSparse",
         help="Path to SuiteSparse results directory.")
     parser.add_argument(
-        "--base-format", default="csr", choices=["csr", "ell", "cusparse_csr"],
-        help="Base sparse format to compare against AMP (default: csr).")
+        "--base-format", default="csrc", choices=["csrc", "ell", "cusparse_csr"],
+        help="Base sparse format to compare against AMP (default: csrc).")
     parser.add_argument(
         "--output", default=None,
         help="Output image path (default: <results-dir>/spmv_<base>_vs_amp.png).")
