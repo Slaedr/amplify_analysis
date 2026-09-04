@@ -28,7 +28,7 @@ KERNEL_RE=""            # empty -> auto per format
 MATRICES=()
 MATRIX_LIST=""
 LAUNCH="auto"           # auto | srun | local
-SRUN_EXTRA="-n1 -c7 --gpus-per-task=1 --gpu-bind=closest"
+SRUN_EXTRA="-n1 -c2 --gpus-per-task=1 --gpu-bind=closest"
 NCU_SETS="${NCU_SETS:-detailed}"   # ncu --set value
 DRY_RUN=0
 

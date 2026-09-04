@@ -33,17 +33,17 @@ info() { printf '\033[36m==>\033[0m %s\n'    "$*" >&2; }
 #     ./amp_spmv_profile.sh --build-dir ... --executor hip --matrix-list ...
 BUILD_DIR="${GINKGO_BUILD_DIR:-}"
 SYSTEM_NAME="${SYSTEM_NAME:-unspecified}"
-FORMATS="${FORMATS:-csr,amp}"
-AMP_BASE="${AMP_BASE_TYPE:-csr}"
+FORMATS="${FORMATS:-csrc,amp}"
+AMP_BASE="${AMP_BASE_TYPE:-csrc}"
 AMP_TOL="${AMP_TOLERANCE:-1e-9}"
 AMP_TOL_TYPE="${AMP_TOLERANCE_TYPE:-componentwise}"
 EXECUTOR="${EXECUTOR:-hip}"
 BENCH_PRECISION="${BENCHMARK_PRECISION:-double}"
 DEVICE_ID=0
 WARMUP="${WARMUP:-3}"
-REPS="${REPETITIONS:-20}"
+REPS="${REPETITIONS:-3}"
 OUTDIR=""          # filled in after argument parsing, from RESULTS_DIR
-KERNEL_RE=""            # empty -> auto per format
+KERNEL_RE="spmv"            # empty -> auto per format
 MATRICES=()
 MATRIX_LIST=""
 TOOL="auto"             # auto | rocprofv3 | rocprof-compute | both
