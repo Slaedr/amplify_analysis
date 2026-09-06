@@ -55,11 +55,12 @@ def _extract_all(json_path: Path):
     time = apply.get("time")
     iters = apply.get("iterations")
     residual = solver_data.get("residual_norm")
-    return name, solver_key, time, iters, residual
+    return name, solver_key, time, iters, solver_data.get("rhs_norm"), residual
 
 
 def collect_results(tree_root: str):
-    """Walk *tree_root* and return ({rel_path: (name, time, iters, residual)}, solver_name, fmt_label)."""
+    """Walk *tree_root* and return ({rel_path: (name, time, iters, rhs_norm, residual)},
+       solver_name, fmt_label)."""
     root = Path(tree_root)
     results: dict = {}
     fmt_label: str | None = None
@@ -72,8 +73,8 @@ def collect_results(tree_root: str):
             except Exception:
                 pass
         try:
-            name, solver_name, time, iters, residual = _extract_all(json_file)
-            results[json_file.relative_to(root)] = (name, time, iters, residual)
+            name, solver_name, time, iters, rhs_norm, residual = _extract_all(json_file)
+            results[json_file.relative_to(root)] = (name, time, iters, rhs_norm, residual)
         except Exception as exc:
             print(f"Warning: skipping {json_file}: {exc}", file=sys.stderr)
 
@@ -87,6 +88,7 @@ def print_table(
     speedups: list,
     base_iters: list,
     amp_iters: list,
+    rhs_norms: list,
     base_residuals: list,
     amp_residuals: list,
     base_label: str,
@@ -99,6 +101,7 @@ def print_table(
     c_sp = max(len("Speedup"), 7)
     c_bi = max(len(f"{base_label}_iters"), 10)
     c_ai = max(len(f"{amp_col}_iters"), 10)
+    c_rn = max(len(f"rhs_norm"), 12)
     c_br = max(len(f"{base_label}_res"), 12)
     c_ar = max(len(f"{amp_col}_res"), 12)
 
@@ -109,6 +112,7 @@ def print_table(
         f"  {'Speedup':>{c_sp}}"
         f"  {base_label + '_iters':>{c_bi}}"
         f"  {amp_col + '_iters':>{c_ai}}"
+        f"  {'rhs_norm':>{c_rn}}"
         f"  {base_label + '_res':>{c_br}}"
         f"  {amp_col + '_res':>{c_ar}}"
     )
@@ -116,12 +120,13 @@ def print_table(
     print(sep)
     print(header)
     print(sep)
-    for name, bt, at, sp, bi, ai, br, ar in zip(
+    for name, bt, at, sp, bi, ai, rn, br, ar in zip(
         matrix_names, base_times, amp_times, speedups,
-        base_iters, amp_iters, base_residuals, amp_residuals,
+        base_iters, amp_iters, rhs_norms, base_residuals, amp_residuals,
     ):
         br_str = f"{br:.3e}" if br == br else "N/A"  # nan check
         ar_str = f"{ar:.3e}" if ar == ar else "N/A"
+        rn_str = f"{rn:.3e}" if rn == rn else "N/A"
         print(
             f"{name:<{c0}}"
             f"  {bt:>{c_bt}.3g}"
@@ -129,6 +134,7 @@ def print_table(
             f"  {sp:>{c_sp}.3g}"
             f"  {bi:>{c_bi}}"
             f"  {ai:>{c_ai}}"
+            f"  {rn_str:>{c_rn}}"
             f"  {br_str:>{c_br}}"
             f"  {ar_str:>{c_ar}}"
         )
@@ -236,26 +242,31 @@ def main() -> None:
     matrix_names = []
     base_times, amp_times, speedups = [], [], []
     base_iters, amp_iters = [], []
+    rhs_norms = []
     base_residuals, amp_residuals = [], []
 
     for key in common_keys:
-        name, b_time, b_iters, b_res = base_results[key]
-        _, a_time, a_iters, a_res = amp_results[key]
+        name, b_time, b_iters, rhs_norm, b_res = base_results[key]
+        _, a_time, a_iters, rhs_norm_a, a_res = amp_results[key]
         if b_time is None or a_time is None:
             print(f"Warning: missing time for {name}, skipping.", file=sys.stderr)
             continue
+        if abs(rhs_norm - rhs_norm_a) / rhs_norm > 1e-8:
+            print(f"Error: RHS norms for base matrix type and AMP are {rhs_norm}, {rhs_norm_a}!")
+            sys.exit(1)
         matrix_names.append(name)
         base_times.append(b_time)
         amp_times.append(a_time)
         speedups.append(b_time / a_time)
         base_iters.append(b_iters if b_iters is not None else 0)
         amp_iters.append(a_iters if a_iters is not None else 0)
+        rhs_norms.append(rhs_norm if rhs_norm is not None else float("nan"))
         base_residuals.append(b_res if b_res is not None else float("nan"))
         amp_residuals.append(a_res if a_res is not None else float("nan"))
 
     print_table(
         matrix_names, base_times, amp_times, speedups,
-        base_iters, amp_iters, base_residuals, amp_residuals,
+        base_iters, amp_iters, rhs_norms, base_residuals, amp_residuals,
         base_label, amp_label,
     )
 
