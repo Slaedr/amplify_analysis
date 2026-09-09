@@ -74,7 +74,7 @@ entry in fp64, and you pay the q-way loop overhead for zero storage benefit.
 Confirmed on `ani4.mtx`: 100 % bin 0 at τ=1e-14, 95 % at τ=1e-10, and only at
 τ=1e-6 does it become 15/83/2 % — where the ceiling finally rises to 1.18×.
 
-### 2. Wavefront lane utilisation — your hypothesis, and it is worse than one wave per row
+### 2. Wavefront lane utilisation — worse than one wave per row
 
 `csr_amp_basic_spmv` gives one **64-wide** wavefront to one row, and then loops
 over the q bins *inside* that wavefront. Each bin's segment of the row is a
@@ -187,7 +187,7 @@ export RESULTS_DIR=$PWD
 export AMP_TOLERANCE=1e-6
 export MATRIX_PATH_FILE=$PWD/matrix_paths.txt
 
-./job_profile_spmv.sh                # profile + report + static model
+./job_rocprof_profile.sh                # profile + report + static model
 ```
 
 On Frontier, submit it instead — one rank on one GCD:
@@ -200,7 +200,7 @@ sbatch --export=ALL,GINKGO_BUILD_DIR=...,MATRIX_PATH_FILE=...,AMP_TOLERANCE=1e-6
 Or drive the profiler directly for one-off runs:
 
 ```sh
-./amp_spmv_profile.sh --matrix-list matrix_paths.txt \
+./rocprof_spmv_profile.sh --matrix-list matrix_paths.txt \
     --formats csr,amp --amp-base-type csr --amp-tolerance 1e-6 \
     --system-name mi210-login --pmc-sets wave,l2
 ```
@@ -218,10 +218,10 @@ the login node before submitting.
 
 ### Step 3 — report
 
-`job_profile_spmv.sh` already does this; to re-run it on an existing directory:
+`job_rocprof_profile.sh` already does this; to re-run it on an existing directory:
 
 ```sh
-python3 amp_spmv_report.py \
+python3 rocprof_spmv_report.py \
     $RESULTS_DIR/results-profile-spmv-csr-$SYSTEM_NAME --markdown
 ```
 
