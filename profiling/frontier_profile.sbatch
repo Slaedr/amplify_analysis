@@ -29,4 +29,4 @@ export MATRIX_PATH_FILE="${MATRIX_PATH_FILE:-$HERE/matrix_paths.txt}"
 # One rank, one GCD, closest CPU cores.  --gpu-bind=closest hands this rank a
 # single GCD; amp_spmv_profile.sh then pins to it with ROCR_VISIBLE_DEVICES.
 srun -N1 -n1 -c7 --gpus-per-task=1 --gpu-bind=closest \
-    bash "$HERE/job_profile_spmv.sh"
+    bash "$HERE/job_rocprof_profile.sh"

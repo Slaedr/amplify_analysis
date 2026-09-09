@@ -71,7 +71,7 @@ Required:
 
 Workload:
   --build-dir DIR        Ginkgo build tree           [$GINKGO_BUILD_DIR]
-  --formats LIST         Comma list for benchmark/spmv    [csr,amp]
+  --formats LIST         Comma list for benchmark/spmv    [csrc,amp]
   --amp-base-type T      ell | csr                        [csr]
   --amp-tolerance T      AMP tolerance                    [1e-9]
   --amp-tolerance-type T componentwise | normwise         [componentwise]

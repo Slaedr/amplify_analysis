@@ -3,7 +3,7 @@
 # suitesparse/job_spmv.sh.
 #
 #   GINKGO_BUILD_DIR=... EXECUTOR=hip SYSTEM_NAME=frontier \
-#   RESULTS_DIR=$PWD ./job_profile_spmv.sh
+#   RESULTS_DIR=$PWD ./job_rocprof_profile.sh
 #
 # Unlike suitesparse/job_spmv.sh this does NOT go through
 # run_all_benchmarks.sh -- hardware counters have to be attached to a single
@@ -41,12 +41,12 @@ if [ ! -r "$MATRIX_PATH_FILE" ]; then
 	exit -1
 fi
 
-export AMP_BASE_TYPE="${AMP_BASE_TYPE:-csr}"
+export AMP_BASE_TYPE="${AMP_BASE_TYPE:-csrc}"
 export AMP_TOLERANCE="${AMP_TOLERANCE:-1e-9}"
 export AMP_TOLERANCE_TYPE="${AMP_TOLERANCE_TYPE:-componentwise}"
 # csr as well as amp: nearly every derived metric in the report is a
 # comparison against the uniform-fp64 baseline on the same matrix.
-export FORMATS="${FORMATS:-csr,amp}"
+export FORMATS="${FORMATS:-csrc,amp}"
 export REPETITIONS="${REPETITIONS:-20}"
 export WARMUP="${WARMUP:-3}"
 export BENCHMARK_PRECISION="${BENCHMARK_PRECISION:-double}"
@@ -54,13 +54,13 @@ export PROFILE_TOOL="${PROFILE_TOOL:-auto}"
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-"$HERE/amp_spmv_profile.sh" \
+"$HERE/rocprof_spmv_profile.sh" \
     --matrix-list "$MATRIX_PATH_FILE" \
     --tool "$PROFILE_TOOL" \
     --launch "${PROFILE_LAUNCH:-auto}"
 
 OUTDIR="$RESULTS_DIR/results-profile-spmv-${AMP_BASE_TYPE}-${SYSTEM_NAME}"
-python3 "$HERE/amp_spmv_report.py" "$OUTDIR" --markdown
+python3 "$HERE/rocprof_spmv_report.py" "$OUTDIR" --markdown
 
 # Static bin/utilisation model over the same matrices, for the same tolerance.
 python3 "$HERE/amp_bin_predict.py" $(grep -v '^\s*#' "$MATRIX_PATH_FILE") \
