@@ -99,8 +99,8 @@ def main():
     fig.tight_layout()
     out_path = (args.output if args.output else
                 str(Path(args.results_dir) /
-                    f"spmv_speedup_{args.base_format}_vs_amp.pdf"))
-    fig.savefig(out_path)
+                    f"spmv_speedup_{args.base_format}_vs_amp.png"))
+    fig.savefig(out_path, dpi=400)
     print(f"Saved plot to {out_path}")
     plt.grid('on')
     #plt.show()
