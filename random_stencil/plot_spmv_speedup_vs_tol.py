@@ -132,7 +132,7 @@ def main():
         "--ymax", type=float, default=None, help="Force the y-axis maximum.")
     parser.add_argument(
         "-o", "--output", default=None,
-        help="Output file (default <results-dir>/spmv_speedup_vs_tolerance.pdf; "
+        help="Output file (default <results-dir>/spmv_speedup_vs_tolerance.png; "
              "extension picks the format).")
     parser.add_argument("--dpi", type=int, default=400)
     args = parser.parse_args()
@@ -239,7 +239,7 @@ def main():
         ax.set_title(args.title)
 
     out_path = Path(args.output) if args.output else (
-        Path(args.results_dir) / "spmv_speedup_vs_tolerance.pdf")
+        Path(args.results_dir) / "spmv_speedup_vs_tolerance.png")
     fig.tight_layout()
     fig.savefig(out_path, dpi=args.dpi, bbox_inches="tight")
 

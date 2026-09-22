@@ -48,7 +48,6 @@ set -euo pipefail
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 
-BASE_CONFIG=${BASE_CONFIG:-${script_dir}/config.json}
 BENCH_BIN=${BENCH_BIN:-${GINKGO_BUILD_DIR:-}/benchmark/amp/amp_benchmark_spmv}
 LAUNCHER=${LAUNCHER:-}
 TOLERANCES=${TOLERANCES:-"1e-4 1e-5 1e-6 1e-7 1e-8 1e-9 1e-10 1e-11 1e-12 1e-13 1e-14"}
