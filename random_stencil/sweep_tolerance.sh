@@ -20,10 +20,10 @@
 #
 #   $RESULTS_DIR/
 #     sweep_manifest.txt
-#     spmv/tol_1e-04/monolithic_classical/{config.json,spmv_..._results.json,run.log}
-#     spmv/tol_1e-04/independent_buckets/{...}
-#     fgs/tol_1e-04/...
-#     gmres/tol_1e-04/...
+#     spmv/tol_1e-02/monolithic_classical/{config.json,spmv_..._results.json,run.log}
+#     spmv/tol_1e-02/independent_buckets/{...}
+#     fgs/tol_1e-02/...
+#     gmres/tol_1e-02/...
 #     ...
 #
 # Each $RESULTS_DIR/<bench> subtree can be handed to the plot script directly.
@@ -45,7 +45,7 @@
 #                                    to run on more than one MPI rank, so this
 #                                    must be a 1-rank launcher if set, e.g.
 #                                    "srun -n 1")
-#   TOLERANCES    space separated    (default 1e-4 .. 1e-14, one per decade)
+#   TOLERANCES    space separated    (default 1e-2 .. 1e-14, one per decade)
 #   STRATEGIES    space separated    (default "monolithic_classical independent_buckets")
 #   DRY_RUN       1 = print only
 #
@@ -70,7 +70,7 @@ BENCHES=${BENCHES:-"spmv fgs gmres"}
 BENCH_DIR=${BENCH_DIR:-${GINKGO_BUILD_DIR:-}/benchmark/amp}
 LAUNCHER=${LAUNCHER:-}
 FGS_LAUNCHER=${FGS_LAUNCHER:-}
-TOLERANCES=${TOLERANCES:-"1e-4 1e-5 1e-6 1e-7 1e-8 1e-9 1e-10 1e-11 1e-12 1e-13 1e-14"}
+TOLERANCES=${TOLERANCES:-"1e-2 1e-3 1e-4 1e-5 1e-6 1e-7 1e-8 1e-9 1e-10 1e-11 1e-12 1e-13 1e-14"}
 STRATEGIES=${STRATEGIES:-"monolithic_classical independent_buckets"}
 DRY_RUN=${DRY_RUN:-0}
 
