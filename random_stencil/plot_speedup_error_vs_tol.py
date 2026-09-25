@@ -27,8 +27,10 @@ Per benchmark:
   gmres  time = solve_ms (full solve),      error vs a 1e-14 reference solve;
          since the FP64 solve is itself only converged to gmres_tol, its error
          is non-zero and drawn as well.  A second panel below shows the GMRES
-         iteration counts; bars / markers of runs that did not converge are
-         hatched / drawn as red crosses.
+         iteration counts of the AMP monolithic strategy (the first strategy
+         found if monolithic was not run) against the base formats; bars /
+         markers of runs that did not converge are hatched / drawn as red
+         crosses.
 
 Speedup lines are unmarked and cool-toned; error curves are marked and
 warm/neutral-toned, so the two families never read as each other.
@@ -229,9 +231,9 @@ def main():
         help="Do not print the speedup value on top of each bar.")
     parser.add_argument(
         "--per-strategy-error", action="store_true",
-        help="Draw one AMP error (and, for GMRES, iteration) curve per "
-             "strategy instead of a single averaged curve (use to check that "
-             "they really do coincide).")
+        help="Draw one AMP error curve per strategy instead of a single "
+             "averaged curve (use to check that they really do coincide). "
+             "The GMRES iteration panel always shows AMP monolithic only.")
     parser.add_argument(
         "--no-iters", action="store_true",
         help="GMRES: omit the iteration-count panel.")
@@ -337,17 +339,22 @@ def main():
     def nc(conv):
         return ", not conv." if conv is False else ""
 
-    # AMP accuracy / iterations: one value per tolerance, pooled over the
-    # strategies.
+    # AMP accuracy: one value per tolerance, pooled over the strategies.
+    # GMRES iterations: AMP monolithic only (first strategy if not present).
+    iter_strategy = ("monolithic_classical"
+                     if "monolithic_classical" in strategies else strategies[0])
+    if iterative and iter_strategy != "monolithic_classical":
+        print(f"  note: no monolithic_classical runs; iteration panel shows "
+              f"'{iter_strategy}'")
     amp_err_by_tol = {}
     amp_iters_by_tol = {}
     amp_noconv_by_tol = {}
     for tol in tolerances:
         pooled = [e for s in strategies for e in errors.get((tol, s), [])]
         amp_err_by_tol[tol] = geomean(pooled)
-        pooled_it = [i for s in strategies for i in iters.get((tol, s), [])]
-        amp_iters_by_tol[tol] = mean(pooled_it) if pooled_it else None
-        amp_noconv_by_tol[tol] = any(noconv[(tol, s)] for s in strategies)
+        its = iters.get((tol, iter_strategy))
+        amp_iters_by_tol[tol] = mean(its) if its else None
+        amp_noconv_by_tol[tol] = noconv[(tol, iter_strategy)]
     # Warn if the strategies do *not* agree -- that would mean the single
     # accuracy / iteration curve is hiding something.
     for tol in tolerances:
@@ -357,12 +364,16 @@ def main():
             print(f"  note: AMP strategies differ in accuracy at tol={tol:.0e} "
                   f"({min(per_s):.3e} .. {max(per_s):.3e}); "
                   f"consider --per-strategy-error")
+    iter_diff = []
+    for tol in tolerances:
         per_s_it = [mean(iters[(tol, s)]) for s in strategies
                     if iters.get((tol, s))]
         if len(per_s_it) > 1 and max(per_s_it) != min(per_s_it):
-            print(f"  note: AMP strategies differ in GMRES iterations at "
-                  f"tol={tol:.0e} ({min(per_s_it):g} .. {max(per_s_it):g}); "
-                  f"consider --per-strategy-error")
+            iter_diff.append(f"{tol:.0e}")
+    if iter_diff:
+        print(f"  note: AMP strategies differ in GMRES iterations at "
+              f"tol={', '.join(iter_diff)}; the iteration panel shows "
+              f"'{iter_strategy}' only")
 
     # ---- figure -------------------------------------------------------------
     x = np.arange(len(tolerances), dtype=float)
@@ -493,25 +504,15 @@ def main():
                            linestyle="none", marker="x", markersize=10,
                            markeredgewidth=2.2, color=NOCONV_COLOR, zorder=7)
 
-        if args.per_strategy_error:
-            for i, strategy in enumerate(strategies):
-                pts = [(xi, mean(iters[(tol, strategy)]),
-                        noconv[(tol, strategy)])
-                       for xi, tol in enumerate(tolerances)
-                       if iters.get((tol, strategy))]
-                if pts:
-                    iter_vals += [p[1] for p in pts]
-                    plot_amp_iters(pts, markers[i % len(markers)],
-                                   PRETTY_STRATEGY.get(strategy, strategy))
-        else:
-            pts = [(xi, amp_iters_by_tol[tol], amp_noconv_by_tol[tol])
-                   for xi, tol in enumerate(tolerances)
-                   if amp_iters_by_tol[tol] is not None]
-            if pts:
-                iter_vals += [p[1] for p in pts]
-                plot_amp_iters(pts, "o", "AMP")
-        if any(noconv[k] for k in noconv):
-            any_noconv = True
+        pts = [(xi, amp_iters_by_tol[tol], amp_noconv_by_tol[tol])
+               for xi, tol in enumerate(tolerances)
+               if amp_iters_by_tol[tol] is not None]
+        if pts:
+            iter_vals += [p[1] for p in pts]
+            plot_amp_iters(pts, "o",
+                           PRETTY_STRATEGY.get(iter_strategy, iter_strategy))
+        iters_noconv = any(p[2] for p in pts)
+        any_noconv = any_noconv or iters_noconv
 
         for val, conv, color, ls, lbl in (
                 (fp64_iters, fp64_conv, "black", "-", f"{base_name}<double>"),
@@ -540,8 +541,12 @@ def main():
         ax_it.yaxis.grid(True, which="minor", linestyle=":", alpha=0.4,
                          linewidth=0.4, zorder=0)
         ax_it.tick_params(axis="y", labelsize=13)
-        ax_it.legend(loc="center left", bbox_to_anchor=(1.01, 0.5),
-                     frameon=False, fontsize=11, handlelength=2.2)
+        # Legend below the panel, under the "AMP tolerance" label, so the
+        # iteration panel keeps the full width of the speedup panel.
+        n_it = len(ax_it.get_legend_handles_labels()[0])
+        ax_it.legend(loc="upper center", bbox_to_anchor=(0.5, -0.42),
+                     ncol=min(max(n_it, 1), 4), frameon=False, fontsize=12,
+                     columnspacing=1.6, handlelength=2.4)
 
     # ---- axes ---------------------------------------------------------------
     ax_x = ax_it if ax_it is not None else ax
@@ -571,7 +576,7 @@ def main():
         handles.append(Patch(facecolor="white", edgecolor="black",
                              hatch="///"))
         labels.append("not converged")
-        if ax_it is not None:
+        if ax_it is not None and iters_noconv:
             handles.append(Line2D([], [], linestyle="none", marker="x",
                                   markersize=9, markeredgewidth=2.0,
                                   color=NOCONV_COLOR))
@@ -610,7 +615,7 @@ def main():
     head = "  tolerance  " + "".join(f"{s[:22]:>24}" for s in strategies) + \
         f"{'AMP error':>14}"
     if iterative:
-        head += f"{'AMP iters':>12}"
+        head += f"{'mono iters' if iter_strategy == 'monolithic_classical' else 'AMP iters':>12}"
     print(head)
     for tol in tolerances:
         line = f"  {tol:<11.0e}"
