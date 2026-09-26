@@ -2,6 +2,9 @@
 #
 # Sweep the AMP tolerance for the AMPLify SpMV, FGS and/or GMRES benchmarks.
 #
+# For GMRES, note that the solver tolerance is set to be the same as the AMP
+# tolerance; we sweep both of them together.
+#
 # For every (benchmark, tolerance, amp_spmv_strategy) triple this runs
 # benchmark/amp/amp_benchmark_<bench> once, with a generated config whose
 # output_file_prefix points into a per-run directory.  Each benchmark names its
@@ -152,15 +155,23 @@ for bench in ${BENCHES}; do
             run_cfg="${run_dir}/config.json"
             mkdir -p "${run_dir}"
 
+			# Set diagonal policy based on bench - only SpMV uses unrestricted diagonal
+			high_prec_diag="true"
+			if [[ "$bench" == "spmv" ]]; then
+				high_prec_diag="false"
+			fi
+
             # Per-run config: template + this tolerance/strategy, output
             # written into this run's own directory.
             "${PYTHON}" - "${BASE_CONFIG}" "${run_cfg}" "${tol}" "${strategy}" \
-                        "${run_dir}/" <<'PY'
+				"${high_prec_diag}" "${run_dir}/" <<'PY'
 import json, sys
-src, dst, tol, strategy, prefix = sys.argv[1:6]
+src, dst, tol, strategy, hpdiag, prefix = sys.argv[1:7]
 cfg = json.load(open(src))
 cfg["amp_tolerance"] = float(tol)
 cfg["amp_spmv_strategy"] = strategy
+cfg["amp_high_precision_diagonal"] = bool(hpdiag == "true")
+cfg["gmres_tol"] = float(tol)
 cfg["output_file_prefix"] = prefix
 with open(dst, "w") as f:
     json.dump(cfg, f, indent=2)
