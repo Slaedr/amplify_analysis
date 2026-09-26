@@ -301,7 +301,7 @@ def main():
         if r["amp_converged"] is False:
             noconv[key] = True
 
-    tolerances = sorted({t for t, _ in speedups}, reverse=True)  # 1e-4 ... 1e-14
+    tolerances = sorted({t for t, _ in speedups})  # 1e-14 ... 1e-2
     found_strategies = sorted({s for _, s in speedups},
                               key=lambda s: (s != "monolithic_classical", s))
     if args.strategies:
@@ -319,11 +319,39 @@ def main():
     fp16_vals = [r["fp16_speedup"] for r in runs if r["fp16_speedup"]]
     fp32 = mean(fp32_vals) if fp32_vals else None
     fp16 = mean(fp16_vals) if fp16_vals and not args.no_fp16 else None
+
+    def agg_by_tol(key, agg):
+        """Per-tolerance aggregate of runs[key], skipping missing values."""
+        out = {}
+        for tol in tolerances:
+            vals = [r[key] for r in runs
+                    if r["tolerance"] == tol and r[key] is not None]
+            out[tol] = agg(vals) if vals else None
+        return out
+
+    def noconv_by_tol(key):
+        return {tol: any(r[key] is False for r in runs if r["tolerance"] == tol)
+                for tol in tolerances}
+
+    # GMRES only: gmres_tol is swept together with the AMP tolerance, so the
+    # base formats' *speedup* over CSR<double> is not constant either (e.g.
+    # once gmres_tol drops below what CSR<float> can resolve, it needs far
+    # more iterations and its speedup collapses) -- tracked per tolerance and
+    # drawn as a curve rather than a mean line + spread band.
+    fp32_speedup_by_tol = agg_by_tol("fp32_speedup", mean)
+    fp16_speedup_by_tol = {} if args.no_fp16 else agg_by_tol("fp16_speedup", mean)
+
     # The FP64 base is exactly the reference for SpMV/FGS (error 0, skipped by
     # geomean); for GMRES it is a converged-to-gmres_tol solve, error > 0.
+    # sweep_tolerance.sh ties gmres_tol to the AMP tolerance for GMRES, so
+    # there the base formats' error/iters genuinely change across the sweep
+    # too -- tracked per tolerance below and drawn as curves, not one line.
     fp64_err = geomean([r["fp64_error"] for r in runs])
     fp32_err = geomean([r["fp32_error"] for r in runs])
     fp16_err = None if args.no_fp16 else geomean([r["fp16_error"] for r in runs])
+    fp64_err_by_tol = agg_by_tol("fp64_error", geomean)
+    fp32_err_by_tol = agg_by_tol("fp32_error", geomean)
+    fp16_err_by_tol = {} if args.no_fp16 else agg_by_tol("fp16_error", geomean)
 
     fp64_iters_vals = [r["fp64_iters"] for r in runs if r["fp64_iters"] is not None]
     fp32_iters_vals = [r["fp32_iters"] for r in runs if r["fp32_iters"] is not None]
@@ -332,9 +360,15 @@ def main():
     fp32_iters = mean(fp32_iters_vals) if fp32_iters_vals else None
     fp16_iters = (mean(fp16_iters_vals)
                   if fp16_iters_vals and not args.no_fp16 else None)
+    fp64_iters_by_tol = agg_by_tol("fp64_iters", mean)
+    fp32_iters_by_tol = agg_by_tol("fp32_iters", mean)
+    fp16_iters_by_tol = {} if args.no_fp16 else agg_by_tol("fp16_iters", mean)
     fp64_conv = all_converged(runs, "fp64_converged")
     fp32_conv = all_converged(runs, "fp32_converged")
     fp16_conv = all_converged(runs, "fp16_converged")
+    fp64_noconv_by_tol = noconv_by_tol("fp64_converged")
+    fp32_noconv_by_tol = noconv_by_tol("fp32_converged")
+    fp16_noconv_by_tol = {} if args.no_fp16 else noconv_by_tol("fp16_converged")
 
     def nc(conv):
         return ", not conv." if conv is False else ""
@@ -422,21 +456,48 @@ def main():
                          rotation=90 if len(tolerances) > 8 else 0)
 
     if fp32 is not None:
-        speedup_vals.append(fp32)
-        ax.axhline(fp32, color=FP32_COLOR, linestyle="--", linewidth=2.0,
-                   zorder=4,
-                   label=f"speedup, {base_name}<float>  ({fp32:.2f}x"
-                         f"{nc(fp32_conv)})")
-        if len(fp32_vals) > 1:
-            lo, hi = min(fp32_vals), max(fp32_vals)
-            if hi - lo > 0.01 * fp32:
-                ax.axhspan(lo, hi, color=FP32_COLOR, alpha=0.12, zorder=1)
+        if iterative:
+            # gmres_tol is swept together with the AMP tolerance, so the
+            # base formats' speedup is not constant either -- draw the curve
+            # instead of a mean line + spread band.
+            pts = [(xi, fp32_speedup_by_tol.get(tol))
+                   for xi, tol in enumerate(tolerances)]
+            pts = [(xi, v) for xi, v in pts if v is not None]
+            if pts:
+                speedup_vals += [v for _, v in pts]
+                ax.plot([p[0] for p in pts], [p[1] for p in pts],
+                        color=FP32_COLOR, linestyle="--", linewidth=2.0,
+                        marker="s", markersize=6, markerfacecolor="white",
+                        markeredgewidth=1.6, zorder=4,
+                        label=f"speedup, {base_name}<float>")
+        else:
+            speedup_vals.append(fp32)
+            ax.axhline(fp32, color=FP32_COLOR, linestyle="--", linewidth=2.0,
+                       zorder=4,
+                       label=f"speedup, {base_name}<float>  ({fp32:.2f}x"
+                             f"{nc(fp32_conv)})")
+            if len(fp32_vals) > 1:
+                lo, hi = min(fp32_vals), max(fp32_vals)
+                if hi - lo > 0.01 * fp32:
+                    ax.axhspan(lo, hi, color=FP32_COLOR, alpha=0.12, zorder=1)
     if fp16 is not None:
-        speedup_vals.append(fp16)
-        ax.axhline(fp16, color=FP16_COLOR, linestyle=":", linewidth=2.2,
-                   zorder=4,
-                   label=f"speedup, {base_name}<half>  ({fp16:.2f}x"
-                         f"{nc(fp16_conv)})")
+        if iterative:
+            pts = [(xi, fp16_speedup_by_tol.get(tol))
+                   for xi, tol in enumerate(tolerances)]
+            pts = [(xi, v) for xi, v in pts if v is not None]
+            if pts:
+                speedup_vals += [v for _, v in pts]
+                ax.plot([p[0] for p in pts], [p[1] for p in pts],
+                        color=FP16_COLOR, linestyle=":", linewidth=2.2,
+                        marker="^", markersize=7, markerfacecolor="white",
+                        markeredgewidth=1.6, zorder=4,
+                        label=f"speedup, {base_name}<half>")
+        else:
+            speedup_vals.append(fp16)
+            ax.axhline(fp16, color=FP16_COLOR, linestyle=":", linewidth=2.2,
+                       zorder=4,
+                       label=f"speedup, {base_name}<half>  ({fp16:.2f}x"
+                             f"{nc(fp16_conv)})")
 
     ax.axhline(1.0, color="black", linewidth=1.0, zorder=4)
 
@@ -467,39 +528,52 @@ def main():
                         marker="o", markersize=7, markerfacecolor="white",
                         markeredgewidth=1.6, zorder=6, label="error, AMP")
 
-    if fp64_err:
-        error_vals.append(fp64_err)
-        ax_err.plot(x, np.full_like(x, fp64_err), color=FP64_ERR_COLOR,
-                    linestyle=":", linewidth=1.8, marker="d", markersize=7,
-                    markevery=max(1, len(x) // 5), markerfacecolor="white",
-                    markeredgewidth=1.5, zorder=5,
-                    label=f"error, {base_name}<double>")
-    if fp32_err:
-        error_vals.append(fp32_err)
-        ax_err.plot(x, np.full_like(x, fp32_err), color=FP32_ERR_COLOR,
-                    linestyle="-.", linewidth=1.8, marker="s", markersize=6,
-                    markevery=max(1, len(x) // 5), markerfacecolor="white",
-                    markeredgewidth=1.5, zorder=5,
-                    label=f"error, {base_name}<float>")
-    if fp16_err:
-        error_vals.append(fp16_err)
-        ax_err.plot(x, np.full_like(x, fp16_err), color=FP16_ERR_COLOR,
-                    linestyle=(0, (7, 3)), linewidth=1.8, marker="^",
-                    markersize=7, markevery=max(1, len(x) // 5),
-                    markerfacecolor="white", markeredgewidth=1.5, zorder=5,
-                    label=f"error, {base_name}<half>")
+    def by_tol_points(d):
+        pts = [(xi, d.get(tol)) for xi, tol in enumerate(tolerances)]
+        return [(xi, e) for xi, e in pts if e]
+
+    base_err_curves = (
+        (fp64_err_by_tol, fp64_err, FP64_ERR_COLOR, ":", "d", 7,
+         f"error, {base_name}<double>"),
+        (fp32_err_by_tol, fp32_err, FP32_ERR_COLOR, "-.", "s", 6,
+         f"error, {base_name}<float>"),
+        (fp16_err_by_tol, fp16_err, FP16_ERR_COLOR, (0, (7, 3)), "^", 7,
+         f"error, {base_name}<half>"),
+    )
+    for by_tol, pooled, color, ls, marker, ms, label in base_err_curves:
+        if iterative:
+            # gmres_tol is swept together with the AMP tolerance, so the
+            # base formats' error is not constant here -- draw the curve.
+            pts = by_tol_points(by_tol)
+            if not pts:
+                continue
+            error_vals += [e for _, e in pts]
+            ax_err.plot([p[0] for p in pts], [p[1] for p in pts],
+                        color=color, linestyle=ls, linewidth=1.8,
+                        marker=marker, markersize=ms, markerfacecolor="white",
+                        markeredgewidth=1.5, zorder=5, label=label)
+        elif pooled:
+            error_vals.append(pooled)
+            ax_err.plot(x, np.full_like(x, pooled), color=color,
+                        linestyle=ls, linewidth=1.8, marker=marker,
+                        markersize=ms, markevery=max(1, len(x) // 5),
+                        markerfacecolor="white", markeredgewidth=1.5,
+                        zorder=5, label=label)
 
     # ---- GMRES iteration panel ----------------------------------------------
     if ax_it is not None:
         iter_vals = []
+        iters_noconv = False
 
-        def plot_amp_iters(pts, marker, label):
+        def plot_iters_curve(pts, color, marker, ls, label):
+            nonlocal iters_noconv
             ax_it.plot([p[0] for p in pts], [p[1] for p in pts],
-                       color=AMP_ERR_COLOR, linestyle="-", linewidth=1.8,
+                       color=color, linestyle=ls, linewidth=1.8,
                        marker=marker, markersize=7, markerfacecolor="white",
                        markeredgewidth=1.6, zorder=6, label=label)
             bad = [p for p in pts if p[2]]
             if bad:
+                iters_noconv = True
                 ax_it.plot([p[0] for p in bad], [p[1] for p in bad],
                            linestyle="none", marker="x", markersize=10,
                            markeredgewidth=2.2, color=NOCONV_COLOR, zorder=7)
@@ -509,20 +583,26 @@ def main():
                if amp_iters_by_tol[tol] is not None]
         if pts:
             iter_vals += [p[1] for p in pts]
-            plot_amp_iters(pts, "o",
-                           PRETTY_STRATEGY.get(iter_strategy, iter_strategy))
-        iters_noconv = any(p[2] for p in pts)
-        any_noconv = any_noconv or iters_noconv
+            plot_iters_curve(pts, AMP_ERR_COLOR, "o", "-",
+                             PRETTY_STRATEGY.get(iter_strategy, iter_strategy))
 
-        for val, conv, color, ls, lbl in (
-                (fp64_iters, fp64_conv, "black", "-", f"{base_name}<double>"),
-                (fp32_iters, fp32_conv, FP32_COLOR, "--", f"{base_name}<float>"),
-                (fp16_iters, fp16_conv, FP16_COLOR, ":", f"{base_name}<half>")):
-            if val is None:
+        # gmres_tol is swept together with the AMP tolerance here too, so
+        # the base formats' iteration counts vary across the sweep as well.
+        for by_tol, noconv_d, color, ls, marker, lbl in (
+                (fp64_iters_by_tol, fp64_noconv_by_tol, "black", "-", "d",
+                 f"{base_name}<double>"),
+                (fp32_iters_by_tol, fp32_noconv_by_tol, FP32_COLOR, "--", "s",
+                 f"{base_name}<float>"),
+                (fp16_iters_by_tol, fp16_noconv_by_tol, FP16_COLOR, ":", "^",
+                 f"{base_name}<half>")):
+            pts = [(xi, by_tol[tol], noconv_d.get(tol, False))
+                   for xi, tol in enumerate(tolerances)
+                   if by_tol.get(tol) is not None]
+            if not pts:
                 continue
-            iter_vals.append(val)
-            ax_it.axhline(val, color=color, linestyle=ls, linewidth=1.6,
-                          zorder=4, label=f"{lbl} ({val:g}{nc(conv)})")
+            iter_vals += [p[1] for p in pts]
+            plot_iters_curve(pts, color, marker, ls, lbl)
+        any_noconv = any_noconv or iters_noconv
 
         ax_it.set_ylabel("GMRES iters")
         if iter_vals:
