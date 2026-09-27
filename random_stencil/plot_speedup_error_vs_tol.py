@@ -68,16 +68,22 @@ plt.rcParams.update({
     "legend.fontsize": 12,
 })
 
-# --- speedup family: cool tones, no markers ------------------------------
-STRATEGY_COLORS = ["#2c7bb6", "#d7191c", "#fdae61", "#4daf4a", "#984ea3"]
-FP32_COLOR = "#1a9850"     # green, dashed
-FP16_COLOR = "#756bb1"     # purple, dotted
+# --- speedup family (left axis): blue/green/violet, no markers -----------
+# Despite the name, two of these used to be red/orange -- squarely in the
+# warm family the error curves below use, which defeats the point of having
+# two families. Kept strictly cool/blue-green so a glance at hue alone says
+# which axis a curve belongs to.
+STRATEGY_COLORS = ["#1f78b4", "#33a02c", "#6a3d9a", "#a6cee3", "#b2df8a"]
+FP32_COLOR = "#02818a"     # teal, dashed
+FP16_COLOR = "#54278f"     # deep violet, dotted
+LEFT_AXIS_COLOR = "#1c4e80"   # dark blue: tints the speedup axis label/ticks
 
-# --- error family: neutral/warm tones, always marked ---------------------
-AMP_ERR_COLOR = "#111111"    # near-black, solid + circles
+# --- error family (right axis): neutral/warm tones, always marked --------
+AMP_ERR_COLOR = "#a63603"    # burnt orange, solid + circles
 FP64_ERR_COLOR = "#737373"   # grey, dotted + diamonds (GMRES only)
 FP32_ERR_COLOR = "#8c510a"   # brown, dash-dot + squares
 FP16_ERR_COLOR = "#c51b7d"   # magenta, long dashes + triangles
+RIGHT_AXIS_COLOR = "#8c510a"  # brown: tints the error axis label/ticks
 
 NOCONV_COLOR = "#e41a1c"     # red crosses for non-converged GMRES runs
 
@@ -499,7 +505,7 @@ def main():
                        label=f"speedup, {base_name}<half>  ({fp16:.2f}x"
                              f"{nc(fp16_conv)})")
 
-    ax.axhline(1.0, color="black", linewidth=1.0, zorder=4)
+    ax.axhline(1.0, color="gray", linewidth=0.8, alpha=0.5, zorder=4)
 
     # ---- error curves on the twin axis -------------------------------------
     markers = ["o", "D", "v", "P", "X"]
@@ -634,18 +640,26 @@ def main():
     ax_x.set_xticks(x)
     ax_x.set_xticklabels([f"$10^{{{round(math.log10(t))}}}$" for t in tolerances])
     ax.set_xlim(-0.6, len(tolerances) - 0.4)
-    ax.set_ylabel(spec["speedup_label"].format(base=base_label))
+    # Tint each y-axis (label, ticks, spine) to match its color family, so
+    # which side a curve belongs to is legible from the axis alone, not just
+    # the legend.
+    ax.set_ylabel(spec["speedup_label"].format(base=base_label),
+                  color=LEFT_AXIS_COLOR)
     ax.set_ylim(0.0, args.ymax if args.ymax else max(speedup_vals) * 1.3)
     ax.yaxis.grid(True, linestyle="--", alpha=0.7, linewidth=0.5, zorder=0)
     ax.set_axisbelow(True)
+    ax.tick_params(axis="y", colors=LEFT_AXIS_COLOR)
+    ax.spines["left"].set_color(LEFT_AXIS_COLOR)
 
     ax_err.set_yscale("log")
-    ax_err.set_ylabel(spec["error_label"])
+    ax_err.set_ylabel(spec["error_label"], color=RIGHT_AXIS_COLOR)
     if args.err_ylim:
         ax_err.set_ylim(*args.err_ylim)
     elif error_vals:
         ax_err.set_ylim(min(error_vals) / 8.0, max(error_vals) * 8.0)
-    ax_err.tick_params(axis="y", labelsize=13)
+    ax_err.tick_params(axis="y", labelsize=13, colors=RIGHT_AXIS_COLOR)
+    ax_err.spines["right"].set_color(RIGHT_AXIS_COLOR)
+    ax_err.spines["left"].set_visible(False)
 
     # One legend for both axes; above the plot, where nothing competes with it.
     handles = ax.get_legend_handles_labels()[0] + \
