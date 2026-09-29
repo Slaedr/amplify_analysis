@@ -1,35 +1,39 @@
 #!/usr/bin/env python3
 
-"""Bar plot of AMP SpMV speedup over a base format, grouped by matrix and by
-AMP tolerance.
+"""Bar plot of SpMV speedup over a double-precision base format, grouped by
+matrix, with one bar per AMP tolerance plus one for a single-precision base
+format.
 
-Reads the per-matrix JSON files written by ``benchmark/spmv/spmv``, expecting
-one subdirectory per AMP-tolerance sweep under ``--results-dir``, e.g.:
+Reads the per-matrix JSON files written by ``benchmark/spmv/spmv`` (via
+``benchmark/run_all_benchmarks.sh``), expecting this layout under
+``--results-dir``:
 
-    results-mi250x-spmv-csrc/
-        tol_9/frontier/hip/SuiteSparse/Janna/CoupCons3D.json
-        tol_9/frontier/hip/SuiteSparse/VLSI/ss1.json
+    results-spmv-csrc-amp/
+        double_precision/Janna/Serena.json   # spmv.csrc  (baseline)
+        single_precision/Janna/Serena.json   # spmv.csrc  (single precision)
+        tol_07/Janna/Serena.json             # spmv.amp / spmv.ampib
+        tol_10/Janna/Serena.json
         ...
-        tol_12/frontier/hip/SuiteSparse/Janna/CoupCons3D.json
-        tol_12/frontier/hip/SuiteSparse/VLSI/ss1.json
-        ...
 
-For each matrix (x-axis), draws one bar per tolerance subdirectory found,
-showing base_time / amp_time.
+Matrices are matched across directories by ``problem.name`` (falling back to
+the file name). For each matrix (x-axis) one bar is drawn per AMP tolerance
+directory (``tol_*``) plus one for the single-precision run, each showing
+``double_time / time``.
 
-The AMP tolerance value itself is always read from each JSON's
-``spmv.<amp-format>.amp_config.amp_tolerance`` (written directly by
-``benchmark/utils/formats.hpp``'s ``write_amp_info``, or hand-patched in for
-older runs that predate it) rather than parsed from the subdirectory name, so
-the ``tol_*`` naming convention is just an organizational convenience, not a
-requirement. If a JSON has no ``amp_tolerance`` at all, the tolerance is
-guessed from a ``tol_<N>`` -style directory name (as ``1e-<N>``) as a
-fallback, with a warning, so older manually-patched trees still work.
+The AMP tolerance value itself is read from each JSON's
+``spmv.<amp-format>.amp_config.amp_tolerance`` rather than parsed from the
+directory name. If a JSON has no ``amp_tolerance``, it is guessed from a
+``tol_<N>`` directory name (as ``1e-<N>``) as a fallback, with a warning.
+
+If ``--double-dir`` does not exist, the baseline is instead read from the
+``--base-format`` entry that sits next to the AMP entry in each tolerance
+JSON (the older single-file-per-run layout), and the single-precision bar is
+omitted.
 
 Usage:
-    ./plot_spmv_speedup_vs_tolerance.py --results-dir results-mi250x-spmv-csrc
-    ./plot_spmv_speedup_vs_tolerance.py --results-dir results-mi250x-spmv-csrc \\
-        --amp-format ampib --base-format csrc
+    ./plot_spmv_speedup_vs_tolerance.py \\
+        --results-dir AMPLify/suitesparse/mi250x-spmv-csrc-amp/results-spmv-csrc-amp
+    ./plot_spmv_speedup_vs_tolerance.py --results-dir <dir> --amp-format ampib
 """
 
 import argparse
@@ -86,36 +90,69 @@ def get_amp_tolerance(amp_case, tol_dir_name, json_path):
     return None
 
 
-def load_records(results_dir, base_format, amp_format, tol_glob):
+def matrix_name(entry, json_path):
+    return entry.get("problem", {}).get("name", json_path.stem)
+
+
+def read_json(json_path):
+    try:
+        with open(json_path) as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError) as exc:
+        print(f"  skipping {json_path}: {exc}")
+        return []
+
+
+def load_baseline(base_dir, base_format):
+    """Returns {matrix: {"time", "error"}} for the `base_format` entry of
+    every JSON under base_dir."""
+    out = {}
+    for json_path in sorted(Path(base_dir).rglob("*.json")):
+        for entry in read_json(json_path):
+            case = entry.get("spmv", {}).get(base_format)
+            if case is None or not case.get("completed", True):
+                continue
+            name = matrix_name(entry, json_path)
+            if name in out:
+                print(f"  warning: duplicate baseline for {name!r} in "
+                      f"{json_path}; keeping the first")
+                continue
+            out[name] = {"time": case["time"],
+                         "error": case.get("max_relative_norm2")}
+    return out
+
+
+def load_amp_records(results_dir, double, base_format, amp_format, tol_glob):
     """Returns a list of {"matrix", "tolerance", "speedup", "error"} dicts.
-    "error" (the AMP relative error vs. the double baseline,
-    max_relative_norm2) is None where a run didn't record it (e.g. it was
-    run with --detailed=false)."""
+    `double` is the {matrix: {...}} baseline from load_baseline(), or None to
+    read the baseline from the same JSON as the AMP entry."""
     results_dir = Path(results_dir)
-    tol_dirs = sorted(results_dir.glob(tol_glob))
+    tol_dirs = sorted(d for d in results_dir.glob(tol_glob) if d.is_dir())
     if not tol_dirs:
-        # Not organized into tol_* subdirectories -- maybe --results-dir
-        # already points at a single tolerance's own results.
         tol_dirs = [results_dir]
 
     records = []
     for tol_dir in tol_dirs:
         for json_path in sorted(tol_dir.rglob("*.json")):
-            try:
-                with open(json_path) as f:
-                    data = json.load(f)
-            except (json.JSONDecodeError, OSError) as exc:
-                print(f"  skipping {json_path}: {exc}")
-                continue
-            for entry in data:
+            for entry in read_json(json_path):
                 spmv = entry.get("spmv", {})
-                if base_format not in spmv or amp_format not in spmv:
+                amp_case = spmv.get(amp_format)
+                if amp_case is None or not amp_case.get("completed", True):
                     continue
-                base_case = spmv[base_format]
-                amp_case = spmv[amp_format]
-                if not base_case.get("completed", True) or not amp_case.get(
-                        "completed", True):
-                    continue
+                name = matrix_name(entry, json_path)
+                if double is not None:
+                    base = double.get(name)
+                    if base is None:
+                        print(f"  skipping {json_path}: no double-precision "
+                              f"baseline for {name!r}")
+                        continue
+                    base_time = base["time"]
+                else:
+                    base_case = spmv.get(base_format)
+                    if base_case is None or not base_case.get(
+                            "completed", True):
+                        continue
+                    base_time = base_case["time"]
                 tolerance = get_amp_tolerance(amp_case, tol_dir.name,
                                               json_path)
                 if tolerance is None:
@@ -123,33 +160,57 @@ def load_records(results_dir, base_format, amp_format, tol_glob):
                           f"for '{amp_format}', and directory name "
                           f"'{tol_dir.name}' doesn't match 'tol_<N>' either")
                     continue
-                name = entry.get("problem", {}).get("name", json_path.stem)
                 records.append({
                     "matrix": name,
                     "tolerance": tolerance,
-                    "speedup": base_case["time"] / amp_case["time"],
+                    "speedup": base_time / amp_case["time"],
                     "error": amp_case.get("max_relative_norm2"),
                 })
     return records
 
 
+SINGLE_COLOR = "#7f7f7f"
+
+
+def fmt_tol(tol):
+    return f"1e{round(math.log10(tol))}"
+
+
+def mean(vals):
+    return sum(vals) / len(vals)
+
+
+def geomean(vals):
+    return math.exp(sum(math.log(v) for v in vals) / len(vals))
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description="Plot AMP SpMV speedup over a base format, with one "
-                    "bar group per matrix and one bar per AMP tolerance.")
+        description="Plot SpMV speedup over double-precision CSRC, with one "
+                    "bar group per matrix and one bar per AMP tolerance plus "
+                    "one for single precision.")
     parser.add_argument(
-        "--results-dir", default="results-mi250x-spmv-csrc",
-        help="Root directory holding one subdirectory per AMP-tolerance "
-             "sweep (default: results-mi250x-spmv-csrc).")
+        "--results-dir",
+        default="AMPLify/suitesparse/mi250x-spmv-csrc-amp/"
+                "results-spmv-csrc-amp",
+        help="Root directory holding the double_precision, single_precision "
+             "and tol_* subdirectories.")
+    parser.add_argument(
+        "--double-dir", default="double_precision",
+        help="Baseline subdirectory, relative to --results-dir (default: "
+             "double_precision).")
+    parser.add_argument(
+        "--single-dir", default="single_precision",
+        help="Single-precision subdirectory, relative to --results-dir "
+             "(default: single_precision). Skipped if it doesn't exist.")
     parser.add_argument(
         "--tol-glob", default="tol_*",
         help="Glob, relative to --results-dir, matching one directory per "
-             "tolerance sweep (default: 'tol_*'). If nothing matches, "
-             "--results-dir itself is treated as a single sweep.")
+             "AMP tolerance (default: 'tol_*').")
     parser.add_argument(
         "--base-format", default="csrc",
         choices=["csrc", "csr", "ell", "cusparse_csr"],
-        help="Base sparse format to compare AMP against (default: csrc).")
+        help="Base sparse format in the double/single runs (default: csrc).")
     parser.add_argument(
         "--amp-format", default="amp", choices=["amp", "ampib"],
         help="Which AMP SpMV strategy to plot (default: amp).")
@@ -157,23 +218,44 @@ def main():
         "--no-labels", action="store_true",
         help="Do not print the speedup value on top of each bar.")
     parser.add_argument(
+        "--show-error", action="store_true",
+        help="Overlay relative-error markers (max_relative_norm2, right "
+             "axis). Off by default to keep the bar labels readable.")
+    parser.add_argument(
         "--output", default=None,
         help="Output image path (default: <results-dir>/"
-             "spmv_speedup_<base-format>_vs_<amp-format>_by_tolerance.png).")
+             "spmv_speedup_vs_double_<base-format>_<amp-format>.png).")
     parser.add_argument("--dpi", type=int, default=400)
     args = parser.parse_args()
 
-    records = load_records(args.results_dir, args.base_format,
-                           args.amp_format, args.tol_glob)
+    results_dir = Path(args.results_dir)
+    double_dir = results_dir / args.double_dir
+    single_dir = results_dir / args.single_dir
+
+    double = None
+    if double_dir.is_dir():
+        double = load_baseline(double_dir, args.base_format)
+        if not double:
+            print(f"No '{args.base_format}' results found in {double_dir}")
+            raise SystemExit(1)
+    else:
+        print(f"  note: {double_dir} not found; reading the "
+              f"'{args.base_format}' baseline from the AMP JSONs instead")
+    single = (load_baseline(single_dir, args.base_format)
+              if single_dir.is_dir() else {})
+    if double is not None and not single:
+        print(f"  note: no single-precision results in {single_dir}; "
+              f"omitting the single-precision bars")
+
+    records = load_amp_records(results_dir, double, args.base_format,
+                               args.amp_format, args.tol_glob)
     if not records:
-        print(f"No results with both '{args.base_format}' and "
-              f"'{args.amp_format}' found under {args.results_dir} "
+        print(f"No '{args.amp_format}' results found under {results_dir} "
               f"(tolerance glob '{args.tol_glob}')")
         raise SystemExit(1)
 
-    matrices = sorted({r["matrix"] for r in records})
-    tolerances = sorted({r["tolerance"] for r in records}, reverse=True)
-
+    # (matrix, series) -> speedup / error, where series is a tolerance
+    # (float) or the string "single".
     by_key = defaultdict(list)
     err_by_key = defaultdict(list)
     for r in records:
@@ -181,64 +263,80 @@ def main():
         by_key[key].append(r["speedup"])
         if r["error"] is not None:
             err_by_key[key].append(r["error"])
-    for (matrix, tolerance), vals in by_key.items():
+    for (matrix, tol), vals in by_key.items():
         if len(vals) > 1:
             print(f"  warning: {len(vals)} results for matrix={matrix!r}, "
-                  f"tolerance={tolerance:.0e}; averaging them")
-    have_errors = bool(err_by_key)
-    if not have_errors:
-        print("  note: no max_relative_norm2 found in any result "
-              "(runs with --detailed=false don't record it); skipping the "
-              "relative-error axis")
+                  f"tolerance={tol:.0e}; averaging them")
+    if double is not None:
+        for matrix, sp in single.items():
+            if matrix in double:
+                by_key[(matrix, "single")].append(
+                    double[matrix]["time"] / sp["time"])
+                if sp["error"] is not None:
+                    err_by_key[(matrix, "single")].append(sp["error"])
+            else:
+                print(f"  skipping single-precision {matrix!r}: no "
+                      f"double-precision baseline")
+
+    matrices = sorted({m for m, _ in by_key})
+    tolerances = sorted({t for _, t in by_key if t != "single"}, reverse=True)
+    series = list(tolerances) + (
+        ["single"] if any(k[1] == "single" for k in by_key) else [])
+    have_errors = bool(err_by_key) and args.show_error
+    if args.show_error and not err_by_key:
+        print("  note: no max_relative_norm2 found in any result; skipping "
+              "the relative-error axis")
 
     base_label = args.base_format.upper()
-    amp_label = ("AMP" if args.amp_format == "amp" else "AMPIB")
-    amp_label = f"{amp_label}[{base_label}]"
+    amp_label = f"{'AMP' if args.amp_format == 'amp' else 'AMPIB'}" \
+                f"[{base_label}]"
 
     x = np.arange(len(matrices), dtype=float)
-    n_tol = len(tolerances)
-    width = min(0.8 / n_tol, 0.28)
+    n_ser = len(series)
+    width = min(0.8 / n_ser, 0.28)
 
-    fig_w = min(24.0, max(7.0, len(matrices) * max(1.8, 0.9 * n_tol)))
+    fig_w = min(24.0, max(7.0, len(matrices) * max(1.8, 0.9 * n_ser)))
     fig, ax = plt.subplots(figsize=(fig_w, 5.5))
     ax2 = ax.twinx() if have_errors else None
 
     all_vals = []
-    all_errs = []
-    for i, tol in enumerate(tolerances):
-        offset = (i - (n_tol - 1) / 2) * width
-        color = TOLERANCE_COLORS[i % len(TOLERANCE_COLORS)]
-        vals, positions = [], []
-        err_vals, err_positions = [], []
+    for i, ser in enumerate(series):
+        offset = (i - (n_ser - 1) / 2) * width
+        is_single = ser == "single"
+        color = SINGLE_COLOR if is_single else \
+            TOLERANCE_COLORS[i % len(TOLERANCE_COLORS)]
+        if is_single:
+            label = "FP32"
+        else:
+            label = f"$10^{{{round(math.log10(ser))}}}$"
+        vals, positions, err_vals, err_positions = [], [], [], []
         for xi, matrix in enumerate(matrices):
-            samples = by_key.get((matrix, tol))
+            samples = by_key.get((matrix, ser))
             if samples:
-                vals.append(sum(samples) / len(samples))
+                vals.append(mean(samples))
                 positions.append(x[xi] + offset)
-            err_samples = err_by_key.get((matrix, tol))
+            err_samples = [e for e in err_by_key.get((matrix, ser), [])
+                           if e > 0]  # exact zeros can't go on a log axis
             if err_samples:
-                err_vals.append(sum(err_samples) / len(err_samples))
+                err_vals.append(mean(err_samples))
                 err_positions.append(x[xi] + offset)
         if vals:
             all_vals += vals
-            exponent = round(math.log10(tol))
             bars = ax.bar(
-                positions, vals, width, label=f"$10^{{{exponent}}}$",
-                color=color, edgecolor="black", linewidth=0.6, zorder=3)
+                positions, vals, width, label=label, color=color,
+                edgecolor="black", linewidth=0.6, zorder=3,
+                hatch="//" if is_single else None)
             if not args.no_labels:
-                ax.bar_label(bars, fmt="%.2f", fontsize=9, padding=2,
-                             rotation=90 if len(matrices) * n_tol > 10
+                ax.bar_label(bars, fmt="%.2f", fontsize=12, padding=2,
+                             rotation=90 if len(matrices) * n_ser > 10
                              else 0)
         if ax2 is not None and err_vals:
-            all_errs += err_vals
             ax2.plot(err_positions, err_vals, linestyle="none", marker="D",
                      markersize=7, markerfacecolor=color,
                      markeredgecolor="black", markeredgewidth=0.6, zorder=5)
 
-    # Faint dashed reference line at 1.0 (no speedup) -- kept light so it
-    # doesn't compete with the bars/markers.
     ax.axhline(1.0, color="0.55", linewidth=1.0, linestyle="--", zorder=2)
-    ax.set_ylabel(f"Speedup over {base_label}")
+    ax.set_ylabel("Speedup over FP64 " + base_label)
     ax.set_xticks(x)
     ax.set_xticklabels(matrices, rotation=30, ha="right")
     ax.set_xlim(-0.6, len(matrices) - 0.4)
@@ -250,52 +348,51 @@ def main():
     handles, labels = ax.get_legend_handles_labels()
     if ax2 is not None:
         ax2.set_yscale("log")
-        ax2.set_ylabel(f"{amp_label} relative error (max_relative_norm2)")
-        marker_proxy = Line2D(
-            [0], [0], linestyle="none", marker="D", markersize=7,
-            markerfacecolor="0.75", markeredgecolor="black",
-            markeredgewidth=0.6, label="relative error (right axis)")
-        handles.append(marker_proxy)
-        labels.append(marker_proxy.get_label())
-    # Placed above the axes rather than in a corner: the error markers can
-    # land anywhere vertically (their own log-scaled axis), so no inside
-    # corner is reliably free of data.
-    ax.legend(handles, labels, title="AMP tolerance", ncol=len(handles),
-             loc="lower center", bbox_to_anchor=(0.5, 1.02), framealpha=0.9)
+        ax2.set_ylabel("Relative error vs. FP64")
+        proxy = Line2D([0], [0], linestyle="none", marker="D", markersize=7,
+                       markerfacecolor="0.75", markeredgecolor="black",
+                       markeredgewidth=0.6,
+                       label="relative error (right axis)")
+        handles.append(proxy)
+        labels.append(proxy.get_label())
+    ax.legend(handles, labels, title=f"{amp_label} tolerance / FP32",
+              ncol=len(handles), loc="lower center",
+              bbox_to_anchor=(0.5, 1.02), framealpha=0.9)
 
     fig.tight_layout()
     out_path = Path(args.output) if args.output else (
-        Path(args.results_dir) /
-        f"spmv_speedup_{args.base_format}_vs_{args.amp_format}_by_tolerance.png")
+        results_dir /
+        f"spmv_speedup_vs_double_{args.base_format}_{args.amp_format}.png")
     fig.savefig(out_path, dpi=args.dpi, bbox_inches="tight")
 
-    print(f"\n{amp_label} SpMV speedup over {base_label}, "
-          f"{len(matrices)} matrix(es), {len(tolerances)} tolerance(s)")
-    head = "  matrix".ljust(16) + "".join(
-        f"{'1e' + str(round(math.log10(t))):>12}" for t in tolerances)
-    print(head)
+    def name(ser):
+        return "FP32" if ser == "single" else fmt_tol(ser)
+
+    print(f"\n{amp_label} / FP32 SpMV speedup over FP64 {base_label}, "
+          f"{len(matrices)} matrix(es)")
+    print("  matrix".ljust(16) + "".join(f"{name(s):>12}" for s in series))
     for matrix in matrices:
         line = f"  {matrix:<14}"
-        for tol in tolerances:
-            samples = by_key.get((matrix, tol))
-            line += (f"{(sum(samples) / len(samples)):>12.2f}"
-                     if samples else f"{'-':>12}")
+        for ser in series:
+            samples = by_key.get((matrix, ser))
+            line += f"{mean(samples):>12.2f}" if samples else f"{'-':>12}"
         print(line)
-    for tol in tolerances:
-        vals = [sum(by_key[(m, tol)]) / len(by_key[(m, tol)])
-                for m in matrices if (m, tol) in by_key]
+    for ser in series:
+        vals = [mean(by_key[(m, ser)]) for m in matrices
+                if (m, ser) in by_key]
         if vals:
-            gm = math.exp(sum(math.log(v) for v in vals) / len(vals))
-            print(f"  geometric mean speedup @ tolerance "
-                  f"1e{round(math.log10(tol))}: {gm:.2f}x")
-        if have_errors:
-            errs = [sum(err_by_key[(m, tol)]) / len(err_by_key[(m, tol)])
-                    for m in matrices if (m, tol) in err_by_key]
-            if errs:
-                gm_err = math.exp(sum(math.log(e) for e in errs)
-                                  / len(errs))
-                print(f"  geometric mean relative error @ tolerance "
-                      f"1e{round(math.log10(tol))}: {gm_err:.2e}")
+            print(f"  geometric mean speedup @ {name(ser)}: "
+                  f"{geomean(vals):.2f}x")
+        errs = [mean(err_by_key[(m, ser)]) for m in matrices
+                if (m, ser) in err_by_key]
+        n_zero = sum(1 for e in errs if e <= 0)
+        errs = [e for e in errs if e > 0]
+        if n_zero:
+            print(f"  note: {n_zero} matrix(es) at {name(ser)} have exactly "
+                  f"zero error; omitted from the error markers and mean")
+        if errs:
+            print(f"  geometric mean relative error @ {name(ser)}: "
+                  f"{geomean(errs):.2e}")
     print(f"\nSaved plot to {out_path}")
 
 
