@@ -85,7 +85,7 @@
 #                      batch script, but do not submit                 [0]
 #
 # Slurm (optional):
-#   SLURM_PARTITION    [batch]      SLURM_TIME   [02:00:00]
+#   SLURM_PARTITION    [batch]      SLURM_TIME   [00:59:00]
 #   SLURM_QOS          [unset]      SLURM_NODES  [1]
 #   SBATCH_EXTRA_ARGS  extra sbatch arguments, e.g. "--exclusive"
 #   SRUN_ARGS          ["-N1 -n1 -c7 --gpus-per-task=1 --gpu-bind=closest"]
@@ -141,7 +141,7 @@ PYTHON=${PYTHON:-python3}
 
 SLURM_ACCOUNT=${SLURM_ACCOUNT:-}
 SLURM_PARTITION=${SLURM_PARTITION:-batch}
-SLURM_TIME=${SLURM_TIME:-02:00:00}
+SLURM_TIME=${SLURM_TIME:-00:59:00}
 SLURM_QOS=${SLURM_QOS:-}
 SLURM_NODES=${SLURM_NODES:-1}
 SBATCH_EXTRA_ARGS=${SBATCH_EXTRA_ARGS:-}
