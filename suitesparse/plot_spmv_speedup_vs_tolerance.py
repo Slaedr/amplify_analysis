@@ -5,34 +5,38 @@ matrix, with one bar per AMP tolerance plus one for a single-precision base
 format.
 
 Reads the per-matrix JSON files written by ``benchmark/spmv/spmv`` (via
-``benchmark/run_all_benchmarks.sh``), expecting this layout under
-``--results-dir``:
+``benchmark/run_all_benchmarks.sh``, see ``submit_spmv_amp_sweep.sh``),
+expecting this layout under ``--results-dir``:
 
-    results-spmv-csrc-amp/
-        double_precision/Janna/Serena.json   # spmv.csrc  (baseline)
-        single_precision/Janna/Serena.json   # spmv.csrc  (single precision)
-        tol_07/Janna/Serena.json             # spmv.amp / spmv.ampib
-        tol_10/Janna/Serena.json
+    results-frontier-spmv-csrc-amp/
+        tol_6/Janna/Serena.json        # spmv.csrc (FP64) + spmv.amp @ 1e-6
+        tol_9/Janna/Serena.json        # spmv.csrc (FP64) + spmv.amp @ 1e-9
         ...
+        double_precision/Janna/Serena.json   # spmv.csrc, FP64
+        single_precision/Janna/Serena.json   # spmv.csrc, FP32
 
 Matrices are matched across directories by ``problem.name`` (falling back to
 the file name). For each matrix (x-axis) one bar is drawn per AMP tolerance
-directory (``tol_*``) plus one for the single-precision run, each showing
-``double_time / time``.
+directory (``tol_*``) plus one for the single-precision run.
+
+* AMP bar: ``csrc_time / amp_time`` taken from the *same* tolerance JSON, so
+  both were timed back to back on the same node. If a tolerance JSON has no
+  ``--base-format`` entry, the FP64 time from ``--double-dir`` is used instead.
+* FP32 bar: ``double_precision time / single_precision time``. It needs both
+  directories; it is omitted otherwise.
 
 The AMP tolerance value itself is read from each JSON's
 ``spmv.<amp-format>.amp_config.amp_tolerance`` rather than parsed from the
 directory name. If a JSON has no ``amp_tolerance``, it is guessed from a
 ``tol_<N>`` directory name (as ``1e-<N>``) as a fallback, with a warning.
 
-If ``--double-dir`` does not exist, the baseline is instead read from the
-``--base-format`` entry that sits next to the AMP entry in each tolerance
-JSON (the older single-file-per-run layout), and the single-precision bar is
-omitted.
+Error markers (``--show-error``) show ``max_relative_norm2`` of the AMP result
+(recorded with DETAILED=1). The FP32 run has no error marker: its
+``max_relative_norm2`` is measured against an FP32 reference, not FP64.
 
 Usage:
     ./plot_spmv_speedup_vs_tolerance.py \\
-        --results-dir AMPLify/suitesparse/mi250x-spmv-csrc-amp/results-spmv-csrc-amp
+        --results-dir results-frontier-spmv-csrc-amp
     ./plot_spmv_speedup_vs_tolerance.py --results-dir <dir> --amp-format ampib
 """
 
@@ -124,8 +128,10 @@ def load_baseline(base_dir, base_format):
 
 def load_amp_records(results_dir, double, base_format, amp_format, tol_glob):
     """Returns a list of {"matrix", "tolerance", "speedup", "error"} dicts.
-    `double` is the {matrix: {...}} baseline from load_baseline(), or None to
-    read the baseline from the same JSON as the AMP entry."""
+    The baseline is the `base_format` entry that sits next to the AMP entry
+    in the same JSON (same node, same run); if it is missing, the FP64 time
+    from `double` (the {matrix: {...}} dict from load_baseline(), or None)
+    is used."""
     results_dir = Path(results_dir)
     tol_dirs = sorted(d for d in results_dir.glob(tol_glob) if d.is_dir())
     if not tol_dirs:
@@ -140,19 +146,16 @@ def load_amp_records(results_dir, double, base_format, amp_format, tol_glob):
                 if amp_case is None or not amp_case.get("completed", True):
                     continue
                 name = matrix_name(entry, json_path)
-                if double is not None:
-                    base = double.get(name)
-                    if base is None:
-                        print(f"  skipping {json_path}: no double-precision "
-                              f"baseline for {name!r}")
-                        continue
-                    base_time = base["time"]
-                else:
-                    base_case = spmv.get(base_format)
-                    if base_case is None or not base_case.get(
-                            "completed", True):
-                        continue
+                base_case = spmv.get(base_format)
+                if base_case is not None and base_case.get("completed", True):
                     base_time = base_case["time"]
+                elif double is not None and name in double:
+                    base_time = double[name]["time"]
+                else:
+                    print(f"  skipping {json_path}: no FP64 '{base_format}' "
+                          f"result for {name!r} (neither in the file nor in "
+                          f"the double-precision directory)")
+                    continue
                 tolerance = get_amp_tolerance(amp_case, tol_dir.name,
                                               json_path)
                 if tolerance is None:
@@ -239,8 +242,8 @@ def main():
             print(f"No '{args.base_format}' results found in {double_dir}")
             raise SystemExit(1)
     else:
-        print(f"  note: {double_dir} not found; reading the "
-              f"'{args.base_format}' baseline from the AMP JSONs instead")
+        print(f"  note: {double_dir} not found; AMP baselines come from the "
+              f"tolerance JSONs, and the FP32 bar is omitted")
     single = (load_baseline(single_dir, args.base_format)
               if single_dir.is_dir() else {})
     if double is not None and not single:
@@ -272,8 +275,8 @@ def main():
             if matrix in double:
                 by_key[(matrix, "single")].append(
                     double[matrix]["time"] / sp["time"])
-                if sp["error"] is not None:
-                    err_by_key[(matrix, "single")].append(sp["error"])
+                # No error marker for FP32: its max_relative_norm2 is relative
+                # to an FP32 reference, not to FP64.
             else:
                 print(f"  skipping single-precision {matrix!r}: no "
                       f"double-precision baseline")

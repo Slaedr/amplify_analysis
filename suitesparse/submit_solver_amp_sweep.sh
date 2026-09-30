@@ -43,7 +43,9 @@
 #                      benchmark/solver/solver_compare (or set
 #                      SOLVER_COMPARE_BIN to the binary directly)
 #   SLURM_ACCOUNT      project to charge (not needed with DRY_RUN=1)
-#   MATRIX_LIST_FILE   Text file with names of Suitesparse matrices to run
+#   MATRIX_LIST_FILE   Text file with names of Suitesparse matrices to run;
+#                      One SuiteSparse name, group/name, ssget id or .mtx
+#                      path per line; '#' starts a comment
 #
 # Experiment (all optional; defaults in brackets):
 #   AMP_TOLERANCES     space-separated AMP tolerances  ["1e-4 1e-6 1e-8 1e-10"]
@@ -72,9 +74,6 @@
 #   WARMUP             warmup repetitions per config                   [2]
 #   EXECUTOR           hip | cuda | omp | reference                  [hip]
 #   SYSTEM_NAME        only used for naming                     [frontier]
-#   MATRIX_LIST_FILE   one SuiteSparse name, group/name, ssget id or .mtx
-#                      path per line; '#' starts a comment
-#                      [<this dir>/structurally_symmetric.txt]
 #   RESULTS_ROOT       output root
 #                      [./results-<system>-<solver>[-<precond>]-<base>]
 #   MATRIX_CACHE_DIR   where matrices found under /tmp are copied
