@@ -74,6 +74,11 @@
 #                      [./results-<system>-spmv-<base>-<amp>]
 #   PREFETCH           1 = resolve and extract matrices with ssget on this node
 #                      before submitting                                    [1]
+#   SSGET_ARCHIVE      ssget archive dir (also read by ssget itself). Matrices
+#                      already extracted under <archive>/MM/<group>/<name>/ are
+#                      used as-is; only missing ones are downloaded/unzipped.
+#                      If it holds ssstats.csv, entries are looked up there
+#                      directly instead of via ssget                     [unset]
 #   SSGET              ssget executable                                [ssget]
 #   DRY_RUN            1 = write everything, submit nothing                 [0]
 #
@@ -180,43 +185,112 @@ if [ "${DRY_RUN}" != "1" ]; then
 fi
 
 # --- Prefetch matrices (never cleans up anything) --------------------------------
+#
+# A matrix already extracted in $SSGET_ARCHIVE (<archive>/MM/<group>/<name>/<name>.mtx,
+# ssget's default tree) is used as-is. Only a matrix missing there is downloaded
+# and unzipped with `ssget -e` (which stores it in the same tree).
+# Entries already present in the archive are accepted by a plain file check.
+# Otherwise, if $SSGET_ARCHIVE/ssstats.csv exists, entries are looked up in it
+# directly, which is much faster than querying ssget.
+
+stats=""
+[ -s "${SSGET_ARCHIVE:-}/ssstats.csv" ] && stats=${SSGET_ARCHIVE}/ssstats.csv
+
+# Prints "id group name real" for each index entry matching $1 (an id, a name
+# or group/name).
+stats_lookup() {
+    awk -F, -v key="$1" '
+        NR > 2 {
+            id = NR - 2
+            if (key ~ /^[0-9]+$/) ok = (id == key)
+            else if (index(key, "/")) ok = (($1 "/" $2) == key)
+            else ok = ($2 == key)
+            if (ok) print id, $1, $2, $6
+        }' "${stats}"
+}
 
 if [ "${PREFETCH}" = "1" ]; then
-    if command -v "${SSGET}" >/dev/null 2>&1; then
-        echo "Resolving/extracting matrices from ${MATRIX_LIST_FILE} with ${SSGET} ..."
-        n_ok=0
-        while read -r entry _; do
-            entry=${entry%%#*}
-            [ -n "${entry}" ] || continue
-            if [[ "${entry}" =~ ^[0-9]+$ ]]; then
-                id=${entry}
-            elif [[ "${entry}" =~ ^([A-Za-z0-9_-]+)/([A-Za-z0-9_-]+)$ ]]; then
-                id=$("${SSGET}" -s "[ @name == ${BASH_REMATCH[2]} ] && [ @group == ${BASH_REMATCH[1]} ]")
-            elif [[ "${entry}" =~ ^[A-Za-z0-9_-]+$ ]]; then
-                id=$("${SSGET}" -s "[ @name == ${entry} ]")
+    echo "Resolving matrices from ${MATRIX_LIST_FILE} (SSGET_ARCHIVE=${SSGET_ARCHIVE:-<unset>}) ..."
+    n_ok=0
+    n_download=0
+    while read -r entry _; do
+        entry=${entry%%#*}
+        [ -n "${entry}" ] || continue
+        if ! [[ "${entry}" =~ ^[0-9]+$ || "${entry}" =~ ^[A-Za-z0-9_-]+/[A-Za-z0-9_-]+$ ||
+                "${entry}" =~ ^[A-Za-z0-9_-]+$ ]]; then
+            warn "skipping unrecognized entry '${entry}'"
+            continue
+        fi
+
+        # Fastest path: a group/name or bare-name entry whose file is already
+        # in the archive needs neither the index nor any ssget query.
+        if [ -n "${SSGET_ARCHIVE:-}" ] && ! [[ "${entry}" =~ ^[0-9]+$ ]]; then
+            if [[ "${entry}" == */* ]]; then
+                cands=("${SSGET_ARCHIVE}/MM/${entry}/${entry#*/}.mtx")
             else
-                warn "skipping unrecognized entry '${entry}'"
+                cands=("${SSGET_ARCHIVE}"/MM/*/"${entry}"/"${entry}.mtx")
+            fi
+            if [ -s "${cands[0]}" ]; then
+                [ ${#cands[@]} -gt 1 ] &&
+                    warn "'${entry}' matches ${#cands[@]} archive entries; using ${cands[0]} (write group/name to choose)"
+                echo "  ${entry}: found in archive (${cands[0]})"
+                n_ok=$((n_ok + 1))
                 continue
             fi
-            ids=(${id})
+        fi
+
+        id="" group="" name="" real=""
+        if [ -n "${stats}" ]; then
+            mapfile -t rows < <(stats_lookup "${entry}")
+            if [ ${#rows[@]} -eq 0 ]; then
+                warn "no match for '${entry}' in ${stats}"
+                continue
+            fi
+            [ ${#rows[@]} -gt 1 ] &&
+                warn "'${entry}' matches ${#rows[@]} matrices; using the first (write group/name to choose)"
+            read -r id group name real <<< "${rows[0]}"
+        else
+            command -v "${SSGET}" >/dev/null 2>&1 ||
+                die "'${SSGET}' not found, and no ssstats.csv in SSGET_ARCHIVE to look up '${entry}' (or use PREFETCH=0)"
+            if [[ "${entry}" =~ ^[0-9]+$ ]]; then
+                ids=(${entry})
+            elif [[ "${entry}" =~ ^([A-Za-z0-9_-]+)/([A-Za-z0-9_-]+)$ ]]; then
+                ids=($("${SSGET}" -s "[ @name == ${BASH_REMATCH[2]} ] && [ @group == ${BASH_REMATCH[1]} ]"))
+            else
+                ids=($("${SSGET}" -s "[ @name == ${entry} ]"))
+            fi
             if [ ${#ids[@]} -eq 0 ] || [ "${ids[0]}" = "0" ]; then
                 warn "no match for '${entry}' in the SuiteSparse index"
                 continue
             fi
-            path=$("${SSGET}" -i "${ids[0]}" -e)
-            if [ -s "${path}" ]; then
-                echo "  ${entry}: ${path}"
-                n_ok=$((n_ok + 1))
-            else
-                warn "ssget did not produce a matrix file for '${entry}'"
-            fi
-        done < "${MATRIX_LIST_FILE}"
-        [ "${n_ok}" -gt 0 ] || die "no matrices could be resolved from ${MATRIX_LIST_FILE}"
-        echo "Prefetched ${n_ok} matri$( [ "${n_ok}" -eq 1 ] && echo x || echo ces)."
-        echo
-    else
-        warn "'${SSGET}' not found; skipping the prefetch (jobs will call ssget themselves)"
-    fi
+            [ ${#ids[@]} -gt 1 ] &&
+                warn "'${entry}' matches ids ${ids[*]}; using ${ids[0]} (write group/name to choose)"
+            id=${ids[0]}
+            name=$("${SSGET}" -i "${id}" -pname)
+            group=$("${SSGET}" -i "${id}" -pgroup)
+            real=$("${SSGET}" -i "${id}" -preal)
+        fi
+        if [ "${real}" = "0" ]; then
+            warn "skipping ${group}/${name}: not real-valued (run_all_benchmarks.sh skips it too)"
+            continue
+        fi
+
+        path=${SSGET_ARCHIVE:-}/MM/${group}/${name}/${name}.mtx
+        if [ -n "${SSGET_ARCHIVE:-}" ] && [ -s "${path}" ]; then
+            echo "  ${group}/${name}: found in archive"
+        else
+            command -v "${SSGET}" >/dev/null 2>&1 ||
+                die "${group}/${name} is not in SSGET_ARCHIVE and '${SSGET}' is not available to download it"
+            echo "  ${group}/${name}: not in archive, downloading with ${SSGET} ..."
+            path=$("${SSGET}" -i "${id}" -e)
+            [ -s "${path}" ] || { warn "ssget did not produce a matrix file for ${group}/${name}"; continue; }
+            n_download=$((n_download + 1))
+        fi
+        n_ok=$((n_ok + 1))
+    done < "${MATRIX_LIST_FILE}"
+    [ "${n_ok}" -gt 0 ] || die "no matrices could be resolved from ${MATRIX_LIST_FILE}"
+    echo "Resolved ${n_ok} matri$( [ "${n_ok}" -eq 1 ] && echo x || echo ces) (${n_download} downloaded)."
+    echo
 fi
 
 # --- Jobs ---------------------------------------------------------------------
