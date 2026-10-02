@@ -171,6 +171,7 @@ cfg = json.load(open(src))
 cfg["amp_tolerance"] = float(tol)
 cfg["amp_spmv_strategy"] = strategy
 cfg["amp_high_precision_diagonal"] = bool(hpdiag == "true")
+cfg["amp_bin_foldup_nnz_ratio"] = 0.05
 cfg["gmres_tol"] = float(tol)
 cfg["output_file_prefix"] = prefix
 with open(dst, "w") as f:
