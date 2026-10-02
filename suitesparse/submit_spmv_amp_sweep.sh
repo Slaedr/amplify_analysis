@@ -85,7 +85,7 @@
 # Slurm (optional):
 #   SLURM_PARTITION [batch]   SLURM_TIME [02:00:00]   SLURM_QOS [unset]
 #   SLURM_NODES [1]           SBATCH_EXTRA_ARGS extra sbatch arguments
-#   SRUN_ARGS ["-N1 -n1 -c7 --gpus-per-task=1 --gpu-bind=closest"]
+#   SRUN_ARGS ["-N1 -n1 -c1 --gpus-per-task=1 --gpu-bind=closest"]
 #   JOB_SETUP shell commands run at the top of every job, e.g. "module load rocm"
 #
 # Example:
@@ -128,7 +128,7 @@ SLURM_TIME=${SLURM_TIME:-02:00:00}
 SLURM_QOS=${SLURM_QOS:-}
 SLURM_NODES=${SLURM_NODES:-1}
 SBATCH_EXTRA_ARGS=${SBATCH_EXTRA_ARGS:-}
-SRUN_ARGS=${SRUN_ARGS:-"-N1 -n1 -c7 --gpus-per-task=1 --gpu-bind=closest"}
+SRUN_ARGS=${SRUN_ARGS:-"-N1 -n1 -c 1 --gpus-per-task=1 --gpu-bind=closest"}
 JOB_SETUP=${JOB_SETUP:-}
 
 RESULTS_ROOT=${RESULTS_ROOT:-${PWD}/results-${SYSTEM_NAME}-spmv-${BASE_FORMAT}-${AMP_FORMAT}}
@@ -360,6 +360,7 @@ for j in "${jobs[@]}"; do
         [ -n "${SLURM_QOS}" ] && echo "#SBATCH -q ${SLURM_QOS}"
         echo "#SBATCH -t ${SLURM_TIME}"
         echo "#SBATCH -N ${SLURM_NODES}"
+        echo "#SBATCH -n 1"
         echo "#SBATCH --gpus-per-task=1"
         echo "#SBATCH -o ${jdir}/slurm-%j.out"
         echo ""
