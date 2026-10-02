@@ -59,8 +59,8 @@
 #   AMP_TOLERANCE_TYPE componentwise | normwise                [componentwise]
 #   AMP_CSR_STRATEGY   automatical|classical|load_balance|merge_path
 #                                                                   [automatical]
-#   AMP_HIGH_PRECISION_DIAGONAL   unset = the AMP class's default
-#   AMP_BIN_FOLDUP_NNZ_RATIO      unset = the AMP class's default
+#   AMP_HIGH_PRECISION_DIAGONAL   false
+#   AMP_BIN_FOLDUP_NNZ_RATIO      0.05
 #   REPETITIONS        timed repetitions                                    [10]
 #   DETAILED           1 = also record max_relative_norm2 (error vs. the
 #                      default format in the same precision); needed for the
@@ -108,8 +108,8 @@ BASE_FORMAT=${BASE_FORMAT:-csrc}
 AMP_FORMAT=${AMP_FORMAT:-amp}
 AMP_TOLERANCE_TYPE=${AMP_TOLERANCE_TYPE:-componentwise}
 AMP_CSR_STRATEGY=${AMP_CSR_STRATEGY:-automatical}
-AMP_HIGH_PRECISION_DIAGONAL=${AMP_HIGH_PRECISION_DIAGONAL:-}
-AMP_BIN_FOLDUP_NNZ_RATIO=${AMP_BIN_FOLDUP_NNZ_RATIO:-}
+AMP_HIGH_PRECISION_DIAGONAL=${AMP_HIGH_PRECISION_DIAGONAL:-false}
+AMP_BIN_FOLDUP_NNZ_RATIO=${AMP_BIN_FOLDUP_NNZ_RATIO:-"0.05"}
 REPETITIONS=${REPETITIONS:-10}
 DETAILED=${DETAILED:-1}
 EXECUTOR=${EXECUTOR:-hip}
