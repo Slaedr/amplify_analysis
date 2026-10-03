@@ -26,6 +26,17 @@ with the relative solution error of config_a with respect to FP64,
 diamonds on a logarithmic right axis. Both numbers come from the same job,
 so each speedup is measured against a baseline timed on the same node.
 
+A second figure (disable with --no-iters-plot) shows how the solves
+behaved: the same x-axis (matrix x variant), with bars for the number of
+solver iterations of config_a, diamonds for the final *true* relative
+residual ||b - A x|| / ||b|| of config_a on a logarithmic right axis (the
+driver's ``residual_norm``, evaluated against the FP64 matrix, not the
+residual in the possibly-reduced-precision storage format), a black tick
+across each bar for the FP64 baseline's iterations in the same job (hence
+with the same residual goal) and hollow diamonds for the baseline's final
+relative residual. Runs that hit the iteration cap without converging are
+marked with '*'.
+
 The variant is always read from inside each JSON -- the precision of
 config_a, and the ``amp_config.amp_tolerance`` the AMP matrix was actually
 built with -- rather than from directory names, so the tree may be arranged
@@ -119,6 +130,17 @@ def matrix_name(row):
     return name[:-4] if name.endswith(".mtx") else name
 
 
+def relative_residual(cfg_result, rhs_norm):
+    """True final relative residual ||b - A x|| / ||b|| (``residual_norm`` is
+    computed against the FP64 matrix), or None if unavailable/non-finite
+    (e.g. a diverged FP32 run reports null)."""
+    res = cfg_result.get("residual_norm")
+    if res is None or not rhs_norm:
+        return None
+    rel = res / rhs_norm
+    return rel if math.isfinite(rel) else None
+
+
 def load_records(results_dir, pattern, time_key, amp_format_filter):
     """Returns (records, info). Each record is a dict with "matrix",
     "variant" (FP32 or an AMP tolerance), "speedup", "error", "base_time",
@@ -199,7 +221,12 @@ def load_records(results_dir, pattern, time_key, amp_format_filter):
                 # Older driver versions only normalized by ||x_a||.
                 error = row["rel_solution_diff"]
                 info["used_fallback_error"] = True
+            rhs_norm = row.get("rhs_norm")
             records.append({
+                "iters_a": a.get("iterations"),
+                "iters_b": b.get("iterations"),
+                "res_a": relative_residual(a, rhs_norm),
+                "res_b": relative_residual(b, rhs_norm),
                 "matrix": matrix_name(row),
                 "variant": variant,
                 "speedup": b_time / a_time,
@@ -229,6 +256,175 @@ def variant_short(variant):
     if variant == FP32:
         return "fp32"
     return f"1e{round(math.log10(variant))}"
+
+
+def plot_iterations_residual(records, matrices, variants, base_label,
+                             amp_label, args, out_path):
+    """Second figure: solver iterations (bars, left axis) and final true
+    relative residual (diamonds, log right axis) per matrix and variant, with
+    the same-job FP64 baseline as a tick (iterations) / hollow diamond
+    (residual)."""
+    iters, iters_base, res, res_base = (defaultdict(list) for _ in range(4))
+    not_converged = set()
+    for r in records:
+        key = (r["matrix"], r["variant"])
+        if r["iters_a"] is not None:
+            iters[key].append(r["iters_a"])
+        if r["iters_b"] is not None:
+            iters_base[key].append(r["iters_b"])
+        if r["res_a"] is not None:
+            res[key].append(r["res_a"])
+        if r["res_b"] is not None:
+            res_base[key].append(r["res_b"])
+        if r["a_converged"] is False:
+            not_converged.add(key)
+    mean = lambda xs: sum(xs) / len(xs)  # noqa: E731
+    iters = {k: mean(v) for k, v in iters.items()}
+    iters_base = {k: mean(v) for k, v in iters_base.items()}
+    res = {k: geomean(v) for k, v in res.items()}
+    res_base = {k: geomean(v) for k, v in res_base.items()}
+    res = {k: v for k, v in res.items() if v}
+    res_base = {k: v for k, v in res_base.items() if v}
+
+    x = np.arange(len(matrices), dtype=float)
+    n_var = len(variants)
+    width = min(0.8 / n_var, 0.28)
+    fig_w = min(24.0, max(7.0, len(matrices) * max(1.8, 0.9 * n_var)))
+    fig, ax = plt.subplots(figsize=(fig_w, 6.0))
+    ax2 = ax.twinx()
+
+    tol_index = 0
+    for i, variant in enumerate(variants):
+        offset = (i - (n_var - 1) / 2) * width
+        if variant == FP32:
+            color, hatch = FP32_COLOR, FP32_HATCH
+        else:
+            color = TOLERANCE_COLORS[tol_index % len(TOLERANCE_COLORS)]
+            hatch = None
+            tol_index += 1
+        pos, vals, texts = [], [], []
+        base_pos, base_vals = [], []
+        r_pos, r_vals, rb_pos, rb_vals = [], [], [], []
+        for xi, matrix in enumerate(matrices):
+            key = (matrix, variant)
+            p = x[xi] + offset
+            if key in iters:
+                pos.append(p)
+                vals.append(iters[key])
+                texts.append(f"{iters[key]:.0f}"
+                             + ("*" if key in not_converged else ""))
+            if key in iters_base:
+                base_pos.append(p)
+                base_vals.append(iters_base[key])
+            if key in res:
+                r_pos.append(p)
+                r_vals.append(res[key])
+            if key in res_base:
+                rb_pos.append(p)
+                rb_vals.append(res_base[key])
+        if vals:
+            bars = ax.bar(pos, vals, width,
+                          label=variant_label(variant, base_label),
+                          color=color, hatch=hatch, edgecolor="black",
+                          linewidth=0.6, zorder=3, alpha=0.55)
+            if not args.no_labels:
+                ax.bar_label(bars, labels=texts, fontsize=9, padding=2,
+                             rotation=90 if len(matrices) * n_var > 10
+                             else 0)
+        if base_vals and not args.no_baseline:
+            ax.hlines(base_vals, np.array(base_pos) - width / 2,
+                      np.array(base_pos) + width / 2, color="black",
+                      linewidth=2.2, zorder=4)
+        if r_vals:
+            ax2.plot(r_pos, r_vals, linestyle="none", marker="D",
+                     markersize=7, markerfacecolor="black",
+                     markeredgecolor="white", markeredgewidth=0.8, zorder=6)
+        if rb_vals and not args.no_baseline:
+            ax2.plot(rb_pos, rb_vals, linestyle="none", marker="o",
+                     markersize=6, markerfacecolor="none",
+                     markeredgecolor="black", markeredgewidth=1.3, zorder=6)
+
+    all_iters = list(iters.values()) + list(iters_base.values())
+    ax.set_yscale("log" if not args.linear_iters else "linear")
+    if all_iters:
+        top = max(all_iters)
+        if args.linear_iters:
+            ax.set_ylim(0.0, top * 1.25)
+        else:
+            ax.set_ylim(1.0, top * 12.0)
+    ax.set_ylabel("Solver iterations")
+    ax.set_xticks(x)
+    ax.set_xticklabels(matrices, rotation=30, ha="right")
+    ax.set_xlim(-0.6, len(matrices) - 0.4)
+    ax.yaxis.grid(True, linestyle="--", alpha=0.7, linewidth=0.5, zorder=0)
+    ax.set_axisbelow(True)
+
+    ax2.set_yscale("log")
+    ax2.set_ylabel("final relative residual "
+                   r"$\|b - Ax\|/\|b\|$")
+    all_res = list(res.values()) + list(res_base.values())
+    if all_res:
+        ax2.set_ylim(min(all_res) / 5.0, max(all_res) * 5.0)
+
+    handles, labels = ax.get_legend_handles_labels()
+    handles.append(Line2D([0], [0], linestyle="none", marker="D",
+                          markersize=7, markerfacecolor="black",
+                          markeredgecolor="white", markeredgewidth=0.8))
+    labels.append("final relative residual (right axis)")
+    if not args.no_baseline:
+        handles.append(Line2D([0], [0], color="black", linewidth=2.2))
+        labels.append(f"{base_label}<double> iterations")
+        handles.append(Line2D([0], [0], linestyle="none", marker="o",
+                              markersize=6, markerfacecolor="none",
+                              markeredgecolor="black", markeredgewidth=1.3))
+        labels.append(f"{base_label}<double> residual")
+    ncol = min(len(handles), 4) if len(handles) > 6 else len(handles)
+    legend = ax.legend(handles, labels, title=f"{amp_label} tolerance",
+                       ncol=ncol, loc="lower center",
+                       bbox_to_anchor=(0.5, 1.02), framealpha=0.9)
+    if not_converged and not args.no_labels:
+        ax.annotate("* hit the iteration cap without converging",
+                    xy=(1.0, -0.02), xycoords="axes fraction", ha="right",
+                    va="top", fontsize=11, color="0.3",
+                    xytext=(0, -56), textcoords="offset points")
+
+    fig.tight_layout()
+    if args.title:
+        fig.canvas.draw()
+        top = legend.get_window_extent().transformed(
+            fig.transFigure.inverted()).y1
+        fig.text(0.5, top + 0.01, args.title, ha="center", va="bottom",
+                 fontsize=plt.rcParams["axes.titlesize"])
+    fig.savefig(out_path, dpi=args.dpi, bbox_inches="tight")
+
+    print(f"\niterations (* = did not converge; FP64 baseline in brackets)")
+    head = "  matrix".ljust(18) + "".join(
+        f"{variant_short(v):>16}" for v in variants)
+    print(head)
+    for matrix in matrices:
+        line = f"  {matrix:<16}"
+        for v in variants:
+            k = (matrix, v)
+            if k in iters:
+                cell = (f"{iters[k]:.0f}" + ("*" if k in not_converged else "")
+                        + (f" [{iters_base[k]:.0f}]" if k in iters_base
+                           else ""))
+            else:
+                cell = "-"
+            line += f"{cell:>16}"
+        print(line)
+    print("\nfinal relative residual (FP64 baseline in brackets)")
+    print(head)
+    for matrix in matrices:
+        line = f"  {matrix:<16}"
+        for v in variants:
+            k = (matrix, v)
+            cell = f"{res[k]:.1e}" if k in res else "-"
+            if k in res_base:
+                cell += f" [{res_base[k]:.0e}]"
+            line += f"{cell:>16}"
+        print(line)
+    print(f"\nSaved iterations/residual plot to {out_path}")
 
 
 def main():
@@ -264,6 +460,21 @@ def main():
         "--output", default=None,
         help="Output image path (default: <results-dir>/"
              "<solver>[-<precond>]_speedup_<base>_by_tolerance.png).")
+    parser.add_argument(
+        "--output-iters", default=None,
+        help="Output image path of the iterations/residual plot (default: "
+             "<results-dir>/<solver>[-<precond>]_iterations_residual_<base>_"
+             "by_tolerance.png).")
+    parser.add_argument(
+        "--no-iters-plot", action="store_true",
+        help="Do not write the iterations/residual plot.")
+    parser.add_argument(
+        "--no-baseline", action="store_true",
+        help="In the iterations/residual plot, leave out the FP64 baseline "
+             "reference (iteration ticks and hollow residual markers).")
+    parser.add_argument(
+        "--linear-iters", action="store_true",
+        help="Linear instead of logarithmic iterations axis.")
     parser.add_argument("--dpi", type=int, default=400)
     args = parser.parse_args()
 
@@ -497,6 +708,14 @@ def main():
                         for m, v in sorted(lost_convergence,
                                            key=lambda k: (k[0], str(k[1])))))
     print(f"\nSaved plot to {out_path}")
+
+    if not args.no_iters_plot:
+        iters_path = Path(args.output_iters) if args.output_iters else (
+            Path(args.results_dir) /
+            f"{stem}_iterations_residual_{base_format.replace('/', '-')}"
+            f"_by_tolerance.png")
+        plot_iterations_residual(records, matrices, variants, base_label,
+                                 amp_label, args, iters_path)
 
 
 if __name__ == "__main__":
