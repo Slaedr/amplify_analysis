@@ -30,7 +30,7 @@ The AMP tolerance value itself is read from each JSON's
 directory name. If a JSON has no ``amp_tolerance``, it is guessed from a
 ``tol_<N>`` directory name (as ``1e-<N>``) as a fallback, with a warning.
 
-Error markers (``--show-error``) show ``max_relative_norm2`` of the AMP result
+Error markers (on by default; ``--no-show-error`` hides them) show ``max_relative_norm2`` of the AMP result
 (recorded with DETAILED=1). The FP32 run has no error marker: its
 ``max_relative_norm2`` is measured against an FP32 reference, not FP64.
 
@@ -71,6 +71,17 @@ TOLERANCE_COLORS = [
 ]
 
 TOL_DIR_RE = re.compile(r"tol_(\d+)")
+
+# Error level expected from single-precision arithmetic; drawn as a faint
+# dashed line on the error axis when the FP32 bars are plotted.
+FP32_EXPECTED_ERROR = 1e-7
+
+# x-axis compactness: the bars of one matrix fill GROUP_FILL of the unit
+# spacing between matrices; the figure grows by INCHES_PER_BAR per bar plus
+# INCHES_GROUP_PAD per matrix group.
+GROUP_FILL = 0.82
+INCHES_PER_BAR = 0.36
+INCHES_GROUP_PAD = 0.2
 
 
 def guess_tolerance_from_dirname(tol_dir_name):
@@ -221,9 +232,9 @@ def main():
         "--no-labels", action="store_true",
         help="Do not print the speedup value on top of each bar.")
     parser.add_argument(
-        "--show-error", action="store_true",
+        "--show-error", action=argparse.BooleanOptionalAction, default=True,
         help="Overlay relative-error markers (max_relative_norm2, right "
-             "axis). Off by default to keep the bar labels readable.")
+             "axis); on by default, --no-show-error turns them off.")
     parser.add_argument(
         "--output", default=None,
         help="Output image path (default: <results-dir>/"
@@ -296,9 +307,10 @@ def main():
 
     x = np.arange(len(matrices), dtype=float)
     n_ser = len(series)
-    width = min(0.8 / n_ser, 0.28)
+    width = GROUP_FILL / n_ser
 
-    fig_w = min(24.0, max(7.0, len(matrices) * max(1.8, 0.9 * n_ser)))
+    fig_w = max(7.0, len(matrices) * (INCHES_PER_BAR * n_ser
+                                    + INCHES_GROUP_PAD))
     fig, ax = plt.subplots(figsize=(fig_w, 5.5))
     ax2 = ax.twinx() if have_errors else None
 
@@ -342,7 +354,7 @@ def main():
     ax.set_ylabel("Speedup over FP64 " + base_label)
     ax.set_xticks(x)
     ax.set_xticklabels(matrices, rotation=30, ha="right")
-    ax.set_xlim(-0.6, len(matrices) - 0.4)
+    ax.set_xlim(-0.5, len(matrices) - 0.5)
     if all_vals:
         ax.set_ylim(0.0, max(all_vals) * 1.25)
     ax.yaxis.grid(True, linestyle="--", alpha=0.7, linewidth=0.5, zorder=0)
@@ -358,6 +370,19 @@ def main():
                        label="relative error (right axis)")
         handles.append(proxy)
         labels.append(proxy.get_label())
+        if "single" in series:
+            ax2.axhline(FP32_EXPECTED_ERROR, color="0.55", linewidth=1.0,
+                        linestyle="--", alpha=0.6, zorder=1)
+            # axhline does not autoscale: keep the line inside the axis.
+            lo, hi = ax2.get_ylim()
+            ax2.set_ylim(min(lo, FP32_EXPECTED_ERROR / 3.0),
+                         max(hi, FP32_EXPECTED_ERROR * 3.0))
+            ref = Line2D([0], [0], color="0.55", linewidth=1.0,
+                         linestyle="--", alpha=0.6,
+                         label="FP32 error level (1e%d)"
+                               % round(math.log10(FP32_EXPECTED_ERROR)))
+            handles.append(ref)
+            labels.append(ref.get_label())
     ax.legend(handles, labels, title=f"{amp_label} tolerance / FP32",
               ncol=len(handles), loc="lower center",
               bbox_to_anchor=(0.5, 1.02), framealpha=0.9)

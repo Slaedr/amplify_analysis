@@ -84,6 +84,13 @@ FP32_COLOR = "#8c8c8c"
 FP32_HATCH = "//"
 
 FP32 = "fp32"
+
+# x-axis compactness: the bars of one matrix fill GROUP_FILL of the unit
+# spacing between matrices; the figure grows by INCHES_PER_BAR per bar plus
+# INCHES_GROUP_PAD per matrix group.
+GROUP_FILL = 0.82
+INCHES_PER_BAR = 0.36
+INCHES_GROUP_PAD = 0.2
 TOL_DIR_RE = re.compile(r"tol_([0-9.eE+-]+)")
 
 
@@ -288,8 +295,9 @@ def plot_iterations_residual(records, matrices, variants, base_label,
 
     x = np.arange(len(matrices), dtype=float)
     n_var = len(variants)
-    width = min(0.8 / n_var, 0.28)
-    fig_w = min(24.0, max(7.0, len(matrices) * max(1.8, 0.9 * n_var)))
+    width = GROUP_FILL / n_var
+    fig_w = max(7.0, len(matrices) * (INCHES_PER_BAR * n_var
+                                    + INCHES_GROUP_PAD))
     fig, ax = plt.subplots(figsize=(fig_w, 6.0))
     ax2 = ax.twinx()
 
@@ -355,7 +363,7 @@ def plot_iterations_residual(records, matrices, variants, base_label,
     ax.set_ylabel("Solver iterations")
     ax.set_xticks(x)
     ax.set_xticklabels(matrices, rotation=30, ha="right")
-    ax.set_xlim(-0.6, len(matrices) - 0.4)
+    ax.set_xlim(-0.5, len(matrices) - 0.5)
     ax.yaxis.grid(True, linestyle="--", alpha=0.7, linewidth=0.5, zorder=0)
     ax.set_axisbelow(True)
 
@@ -552,8 +560,9 @@ def main():
 
     x = np.arange(len(matrices), dtype=float)
     n_var = len(variants)
-    width = min(0.8 / n_var, 0.28)
-    fig_w = min(24.0, max(7.0, len(matrices) * max(1.8, 0.9 * n_var)))
+    width = GROUP_FILL / n_var
+    fig_w = max(7.0, len(matrices) * (INCHES_PER_BAR * n_var
+                                    + INCHES_GROUP_PAD))
     fig, ax = plt.subplots(figsize=(fig_w, 5.5))
     ax2 = ax.twinx() if have_errors else None
 
@@ -615,7 +624,7 @@ def main():
     ax.set_ylabel(f"Speedup over {base_label}<double>{time_desc}")
     ax.set_xticks(x)
     ax.set_xticklabels(matrices, rotation=30, ha="right")
-    ax.set_xlim(-0.6, len(matrices) - 0.4)
+    ax.set_xlim(-0.5, len(matrices) - 0.5)
     if all_vals:
         ax.set_ylim(0.0, max(all_vals) * 1.25)
     ax.yaxis.grid(True, linestyle="--", alpha=0.7, linewidth=0.5, zorder=0)
