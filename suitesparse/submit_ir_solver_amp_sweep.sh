@@ -79,7 +79,7 @@
 #                      multicolor                              [multicolor]
 #   FGS_SWEEPS         sweeps per FGS preconditioner application      [1]
 #   GMRES_RESTART      Krylov dimension (and iteration limit) of the inner
-#                      GMRES                                        [100]
+#                      GMRES                                          [40]
 #   RHS_GENERATION     1 | random | sinus                              [1]
 #   INITIAL_GUESS      0 | random | rhs                                [0]
 #   REPETITIONS        timed repetitions per config ("auto" allowed)  [10]
@@ -145,7 +145,7 @@ MAX_ITERS=${MAX_ITERS:-500}
 REL_RES_GOAL=${REL_RES_GOAL:-1e-10}
 REORDER=${REORDER:-multicolor}
 FGS_SWEEPS=${FGS_SWEEPS:-1}
-GMRES_RESTART=${GMRES_RESTART:-100}
+GMRES_RESTART=${GMRES_RESTART:-40}
 RHS_GENERATION=${RHS_GENERATION:-1}
 INITIAL_GUESS=${INITIAL_GUESS:-0}
 REPETITIONS=${REPETITIONS:-10}
