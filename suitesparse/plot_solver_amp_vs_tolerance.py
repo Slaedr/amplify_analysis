@@ -2,7 +2,10 @@
 
 """Bar plot of solver speedup and solution error of AMP (at several
 tolerances) and of single precision, relative to a fixed-precision FP64
-solve, grouped by matrix.
+solve, grouped by matrix. Works for plain solvers (e.g. GMRES) and for
+GMRES-IR, where the compared variants are the *inner* solver's matrix format
+and precision (``ir_inner_format`` / ``ir_inner_precision``) while the outer
+loop stays FP64.
 
 Reads the ``solver_compare_results.json`` files written by ginkgo's
 ``benchmark/solver/solver_compare`` driver, laid out as
@@ -15,7 +18,8 @@ Reads the ``solver_compare_results.json`` files written by ginkgo's
         fp32/solver_compare_results.json
 
 In every file, config_b is the FP64 baseline (<BASE><double>) and config_a
-is either AMP[<BASE>] at one tolerance or <BASE><float>. For each matrix
+is either AMP[<BASE>] at one tolerance or <BASE><float>. (For GMRES-IR, <BASE>
+is the inner solver's format, e.g. CSRC.) For each matrix
 (x-axis) this draws one bar per variant -- FP32 first, then the AMP
 tolerances from loosest to tightest -- showing
 
@@ -103,12 +107,26 @@ def merged_config(data, which):
 
 
 def config_precision(data, which):
-    """"single" or "double"; newer driver versions record it directly."""
+    """"single" or "double": the precision the *variant* runs in. For plain
+    solvers that is the solver precision; for GMRES-IR it is the precision of
+    the inner solver (``ir_inner_precision``), since the outer loop is always
+    FP64."""
+    cfg = merged_config(data, which)
+    inner = cfg.get("ir_inner_precision")
+    if inner:
+        return "single" if inner in ("single", "fp32", "float") else "double"
     recorded = data.get(f"precision_{which}")
     if recorded:
         return recorded
-    value = merged_config(data, which).get("precision", "double")
+    value = cfg.get("precision", "double")
     return "single" if value in ("single", "fp32", "float") else "double"
+
+
+def config_format(cfg):
+    """Matrix format of the variant: the inner solver's format for GMRES-IR
+    (``ir_inner_format``; top-level ``formats`` is then the outer matrix's),
+    otherwise ``formats``."""
+    return cfg.get("ir_inner_format") or cfg.get("formats", "")
 
 
 def round_tolerance(tol):
@@ -174,7 +192,7 @@ def load_records(results_dir, pattern, time_key, amp_format_filter):
         if config_precision(data, "b") != "double":
             print(f"  warning: {json_path}: config_b is not double precision; "
                   f"speedups and errors are not relative to FP64")
-        format_a = cfg_a.get("formats", "")
+        format_a = config_format(cfg_a)
         is_amp = format_a in ("amp", "ampib")
         if prec_a == "single":
             variant_kind = FP32
@@ -187,7 +205,7 @@ def load_records(results_dir, pattern, time_key, amp_format_filter):
             print(f"  skipping {json_path}: config_a ('{format_a}', "
                   f"{prec_a}) is neither AMP nor single precision")
             continue
-        info["base_formats"].add(cfg_b.get("formats", "?"))
+        info["base_formats"].add(config_format(cfg_b) or "?")
         info["solvers"].add((cfg_a.get("solvers", "?"),
                              cfg_a.get("preconditioners", "none")))
         info["files"] += 1
@@ -486,6 +504,9 @@ def main():
     parser.add_argument("--dpi", type=int, default=400)
     args = parser.parse_args()
 
+    if not Path(args.results_dir).is_dir():
+        raise SystemExit(f"--results-dir '{args.results_dir}' is not a "
+                         f"directory (relative to {Path.cwd()})")
     time_key = f"{args.time}_time"
     records, info = load_records(args.results_dir, args.pattern, time_key,
                                  args.amp_format)
