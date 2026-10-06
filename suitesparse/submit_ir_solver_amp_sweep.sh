@@ -132,7 +132,7 @@ warn() { echo "WARNING: $*" >&2; }
 
 # --- Settings -----------------------------------------------------------------
 
-AMP_TOLERANCES=${AMP_TOLERANCES:-"1e-6 1e-8 1e-9 1e-10"}
+AMP_TOLERANCES=${AMP_TOLERANCES:-"1e-4 1e-6 1e-8 1e-9"}
 INCLUDE_FP32=${INCLUDE_FP32:-1}
 BASE_FORMAT=${BASE_FORMAT:-csrc}
 AMP_FORMAT=${AMP_FORMAT:-amp}
