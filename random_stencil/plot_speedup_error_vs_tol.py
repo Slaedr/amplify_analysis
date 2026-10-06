@@ -5,7 +5,13 @@ for the SpMV, FGS and GMRES benchmarks.
 
 Generalizes ``plot_spmv_speedup_error_vs_tol.py``; the SpMV figure is
 unchanged.  The benchmark is detected from the top-level key of each result
-JSON ("spmv" / "fgs" / "gmres").
+JSON ("spmv" / "fgs" / "gmres"), and one figure is drawn for every benchmark
+found under the results directory (so a tree with spmv, fgs and gmres gives
+three figures, one with only spmv and fgs gives two, ...).  The benchmarks are
+processed completely independently of each other: each has its own runs,
+reference values, axes and output file.  To plot just one, point the script at
+that benchmark's sub-directory.  Each figure is written to
+<prefix>-<bench>.png (see -o).
 
   left axis  (bars + horizontal lines)   speedup over <base><double>
       * one bar per AMP SpMV strategy, grouped per AMP tolerance
@@ -40,9 +46,10 @@ JSON itself, so file names do not matter; the tolerance is not encoded in the
 name the benchmark writes.
 
 Usage:
-    ./plot_speedup_error_vs_tol.py results-tol-ell-cuda/gmres
-    ./plot_speedup_error_vs_tol.py results-tol-ell-cuda --bench fgs
-    ./plot_speedup_error_vs_tol.py results/ --base-format csr -o fig.pdf
+    ./plot_speedup_error_vs_tol.py results-tol-ell-cuda       # all benchmarks
+    ./plot_speedup_error_vs_tol.py results-tol-ell-cuda/gmres # just GMRES
+    ./plot_speedup_error_vs_tol.py results/ --base-format csr -o fig
+        # -> fig-spmv.png, fig-fgs.png, fig-gmres.png
 """
 
 import argparse
@@ -59,14 +66,44 @@ import numpy as np  # noqa: E402
 from matplotlib.lines import Line2D  # noqa: E402
 from matplotlib.patches import Patch  # noqa: E402
 
-plt.rcParams.update({
+BASE_RCPARAMS = {
     "font.size": 15,
     "axes.labelsize": 16,
     "axes.titlesize": 16,
     "xtick.labelsize": 14,
     "ytick.labelsize": 15,
     "legend.fontsize": 12,
-})
+}
+plt.rcParams.update(BASE_RCPARAMS)
+
+# --large-text: thicker bars, a taller figure and bigger text and markers. All
+# text sizes (the rcParams above and the explicit font sizes below) and marker
+# sizes are multiplied by LARGE_TEXT_SCALE; the figure is LARGE_WIDTH_FACTOR
+# times wider, the bars fill more of the space between tolerances
+# (BAR_FILL / MAX_BAR_WIDTH), and the figure is LARGE_HEIGHT_FACTOR times
+# taller.
+BAR_FILL, MAX_BAR_WIDTH = 0.8, 0.35
+LARGE_TEXT_SCALE = 1.4
+LARGE_BAR_FILL, LARGE_MAX_BAR_WIDTH = 0.92, 0.46
+LARGE_WIDTH_FACTOR = 1.4
+LARGE_HEIGHT_FACTOR = 1.75
+# With --large-text the speedup value on top of each bar and the tolerance
+# labels on the x axis are emphasised beyond the general scale-up (font
+# sizes in points; the defaults are 10 and 14, see BASE_RCPARAMS).
+LARGE_BAR_LABEL_SIZE = 18
+LARGE_XTICK_SIZE = 22
+
+
+def apply_layout(large_text):
+    """Returns (text_scale, bar_fill, max_bar_width, width_factor,
+    height_factor) and, for --large-text, scales the matplotlib font
+    rcParams."""
+    if not large_text:
+        return 1.0, BAR_FILL, MAX_BAR_WIDTH, 1.0, 1.0
+    plt.rcParams.update({k: v * LARGE_TEXT_SCALE
+                         for k, v in BASE_RCPARAMS.items()})
+    return (LARGE_TEXT_SCALE, LARGE_BAR_FILL, LARGE_MAX_BAR_WIDTH,
+            LARGE_WIDTH_FACTOR, LARGE_HEIGHT_FACTOR)
 
 # --- speedup family (left axis): blue/green/violet, no markers -----------
 # Despite the name, two of these used to be red/orange -- squarely in the
@@ -211,80 +248,20 @@ def all_converged(runs, key):
     return all(flags)
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Plot AMP speedup and relative error vs AMP tolerance "
-                    "for the SpMV / FGS / GMRES benchmarks.")
-    parser.add_argument(
-        "results_dir", nargs="?", default="results",
-        help="Directory holding the sweep results (searched recursively).")
-    parser.add_argument(
-        "--bench", default=None, choices=sorted(BENCHES),
-        help="Which benchmark to plot; required only if the tree mixes several.")
-    parser.add_argument(
-        "--base-format", default=None, choices=["ell", "csr"],
-        help="Which base format to plot; required only if the tree mixes both.")
-    parser.add_argument(
-        "--strategies", default=None,
-        help="Comma separated strategy order, e.g. "
-             "monolithic_classical,independent_buckets. "
-             "Default: all found, monolithic first.")
-    parser.add_argument(
-        "--no-fp16", action="store_true",
-        help="Drop the FP16 speedup and error lines even if the runs have them.")
-    parser.add_argument(
-        "--no-labels", action="store_true",
-        help="Do not print the speedup value on top of each bar.")
-    parser.add_argument(
-        "--per-strategy-error", action="store_true",
-        help="Draw one AMP error curve per strategy instead of a single "
-             "averaged curve (use to check that they really do coincide). "
-             "The GMRES iteration panel always shows AMP monolithic only.")
-    parser.add_argument(
-        "--no-iters", action="store_true",
-        help="GMRES: omit the iteration-count panel.")
-    parser.add_argument(
-        "--title", default=None, help="Optional figure title.")
-    parser.add_argument(
-        "--ymax", type=float, default=None,
-        help="Force the speedup (left) axis maximum.")
-    parser.add_argument(
-        "--err-ylim", nargs=2, type=float, default=None, metavar=("LO", "HI"),
-        help="Force the error (right) axis limits, e.g. --err-ylim 1e-16 1e-1.")
-    parser.add_argument(
-        "-o", "--output", default=None,
-        help="Output file (default "
-             "<results-dir>/<bench>_speedup_error_vs_tolerance.png; "
-             "extension picks the format).")
-    parser.add_argument("--dpi", type=int, default=400)
-    args = parser.parse_args()
+def output_path(args, bench):
+    """Output file of one benchmark's figure: <prefix>-<bench>.png, where the
+    prefix is --output or, by default, <results-dir>/speedup_error_vs_tolerance."""
+    prefix = args.output or str(
+        Path(args.results_dir) / "speedup_error_vs_tolerance")
+    return Path(f"{prefix}-{bench}.png")
 
-    runs = load_runs(args.results_dir)
-    if not runs:
-        raise SystemExit(f"No SpMV/FGS/GMRES result JSON found under "
-                         f"{args.results_dir}")
 
-    benches = sorted({r["bench"] for r in runs})
-    if args.bench:
-        runs = [r for r in runs if r["bench"] == args.bench]
-        if not runs:
-            raise SystemExit(f"No runs for benchmark '{args.bench}' "
-                             f"(found: {', '.join(benches)})")
-    elif len(benches) > 1:
-        raise SystemExit("Results mix benchmarks "
-                         f"({', '.join(benches)}); pass --bench.")
+def plot_bench(runs, args, layout, out_path):
+    """Aggregate and plot one benchmark (all of ``runs`` must be of the same
+    benchmark and base format) and save the figure to ``out_path``."""
+    scale, bar_fill, max_bar_width, width_factor, height_factor = layout
     bench = runs[0]["bench"]
     spec = BENCHES[bench]
-
-    formats = sorted({r["base_format"] for r in runs})
-    if args.base_format:
-        runs = [r for r in runs if r["base_format"] == args.base_format]
-        if not runs:
-            raise SystemExit(f"No runs with base format '{args.base_format}' "
-                             f"(found: {', '.join(formats)})")
-    elif len(formats) > 1:
-        raise SystemExit("Results mix base formats "
-                         f"({', '.join(formats)}); pass --base-format.")
 
     base_label = runs[0]["base_label"]          # e.g. "ELL<double>"
     base_name = base_label.split("<")[0]        # e.g. "ELL"
@@ -314,9 +291,10 @@ def main():
         strategies = [s.strip() for s in args.strategies.split(",") if s.strip()]
         missing = [s for s in strategies if s not in found_strategies]
         if missing:
-            raise SystemExit(f"No runs for strategy/strategies: "
-                             f"{', '.join(missing)} "
-                             f"(found: {', '.join(found_strategies)})")
+            print(f"  skipping {bench}: no runs for strategy/strategies: "
+                  f"{', '.join(missing)} "
+                  f"(found: {', '.join(found_strategies)})")
+            return
     else:
         strategies = found_strategies
 
@@ -418,15 +396,15 @@ def main():
     # ---- figure -------------------------------------------------------------
     x = np.arange(len(tolerances), dtype=float)
     n_str = len(strategies)
-    width = min(0.8 / n_str, 0.35)
+    width = min(bar_fill / n_str, max_bar_width)
 
-    fig_w = min(12.0, max(7.0, 0.9 * len(tolerances) + 2.5))
+    fig_w = min(12.0, max(7.0, 0.9 * len(tolerances) + 2.5)) * width_factor
     if show_iters:
         fig, (ax, ax_it) = plt.subplots(
-            2, 1, sharex=True, figsize=(fig_w, 7.0),
+            2, 1, sharex=True, figsize=(fig_w, 7.0 * height_factor),
             gridspec_kw={"height_ratios": [3.0, 1.25], "hspace": 0.08})
     else:
-        fig, ax = plt.subplots(figsize=(fig_w, 5.0))
+        fig, ax = plt.subplots(figsize=(fig_w, 5.0 * height_factor))
         ax_it = None
     ax_err = ax.twinx()
     # The error curves must stay readable where they cross the bars, so the
@@ -458,7 +436,9 @@ def main():
                 bar.set_hatch(hatch)
                 any_noconv = True
         if not args.no_labels:
-            ax.bar_label(bars, fmt="%.2f", fontsize=10, padding=2,
+            ax.bar_label(bars, fmt="%.2f", padding=2,
+                         fontsize=(LARGE_BAR_LABEL_SIZE if args.large_text
+                                   else 10),
                          rotation=90 if len(tolerances) > 8 else 0)
 
     if fp32 is not None:
@@ -473,7 +453,7 @@ def main():
                 speedup_vals += [v for _, v in pts]
                 ax.plot([p[0] for p in pts], [p[1] for p in pts],
                         color=FP32_COLOR, linestyle="--", linewidth=2.0,
-                        marker="s", markersize=6, markerfacecolor="white",
+                        marker="s", markersize=6 * scale, markerfacecolor="white",
                         markeredgewidth=1.6, zorder=4,
                         label=f"speedup, {base_name}<float>")
         else:
@@ -495,7 +475,7 @@ def main():
                 speedup_vals += [v for _, v in pts]
                 ax.plot([p[0] for p in pts], [p[1] for p in pts],
                         color=FP16_COLOR, linestyle=":", linewidth=2.2,
-                        marker="^", markersize=7, markerfacecolor="white",
+                        marker="^", markersize=7 * scale, markerfacecolor="white",
                         markeredgewidth=1.6, zorder=4,
                         label=f"speedup, {base_name}<half>")
         else:
@@ -520,7 +500,7 @@ def main():
             error_vals += [e for _, e in pts]
             ax_err.plot([p[0] for p in pts], [p[1] for p in pts],
                         color=AMP_ERR_COLOR, linestyle="-", linewidth=1.8,
-                        marker=markers[i % len(markers)], markersize=7,
+                        marker=markers[i % len(markers)], markersize=7 * scale,
                         markerfacecolor="white", markeredgewidth=1.6,
                         zorder=6,
                         label=f"error, {PRETTY_STRATEGY.get(strategy, strategy)}")
@@ -531,7 +511,7 @@ def main():
             error_vals += [e for _, e in pts]
             ax_err.plot([p[0] for p in pts], [p[1] for p in pts],
                         color=AMP_ERR_COLOR, linestyle="-", linewidth=1.8,
-                        marker="o", markersize=7, markerfacecolor="white",
+                        marker="o", markersize=7 * scale, markerfacecolor="white",
                         markeredgewidth=1.6, zorder=6, label="error, AMP")
 
     def by_tol_points(d):
@@ -556,13 +536,13 @@ def main():
             error_vals += [e for _, e in pts]
             ax_err.plot([p[0] for p in pts], [p[1] for p in pts],
                         color=color, linestyle=ls, linewidth=1.8,
-                        marker=marker, markersize=ms, markerfacecolor="white",
+                        marker=marker, markersize=ms * scale, markerfacecolor="white",
                         markeredgewidth=1.5, zorder=5, label=label)
         elif pooled:
             error_vals.append(pooled)
             ax_err.plot(x, np.full_like(x, pooled), color=color,
                         linestyle=ls, linewidth=1.8, marker=marker,
-                        markersize=ms, markevery=max(1, len(x) // 5),
+                        markersize=ms * scale, markevery=max(1, len(x) // 5),
                         markerfacecolor="white", markeredgewidth=1.5,
                         zorder=5, label=label)
 
@@ -575,13 +555,13 @@ def main():
             nonlocal iters_noconv
             ax_it.plot([p[0] for p in pts], [p[1] for p in pts],
                        color=color, linestyle=ls, linewidth=1.8,
-                       marker=marker, markersize=7, markerfacecolor="white",
+                       marker=marker, markersize=7 * scale, markerfacecolor="white",
                        markeredgewidth=1.6, zorder=6, label=label)
             bad = [p for p in pts if p[2]]
             if bad:
                 iters_noconv = True
                 ax_it.plot([p[0] for p in bad], [p[1] for p in bad],
-                           linestyle="none", marker="x", markersize=10,
+                           linestyle="none", marker="x", markersize=10 * scale,
                            markeredgewidth=2.2, color=NOCONV_COLOR, zorder=7)
 
         pts = [(xi, amp_iters_by_tol[tol], amp_noconv_by_tol[tol])
@@ -626,12 +606,12 @@ def main():
         ax_it.set_axisbelow(True)
         ax_it.yaxis.grid(True, which="minor", linestyle=":", alpha=0.4,
                          linewidth=0.4, zorder=0)
-        ax_it.tick_params(axis="y", labelsize=13)
+        ax_it.tick_params(axis="y", labelsize=13 * scale)
         # Legend below the panel, under the "AMP tolerance" label, so the
         # iteration panel keeps the full width of the speedup panel.
         n_it = len(ax_it.get_legend_handles_labels()[0])
         ax_it.legend(loc="upper center", bbox_to_anchor=(0.5, -0.42),
-                     ncol=min(max(n_it, 1), 4), frameon=False, fontsize=12,
+                     ncol=min(max(n_it, 1), 4), frameon=False, fontsize=12 * scale,
                      columnspacing=1.6, handlelength=2.4)
 
     # ---- axes ---------------------------------------------------------------
@@ -639,6 +619,8 @@ def main():
     ax_x.set_xlabel("AMP tolerance")
     ax_x.set_xticks(x)
     ax_x.set_xticklabels([f"$10^{{{round(math.log10(t))}}}$" for t in tolerances])
+    if args.large_text:
+        ax_x.tick_params(axis="x", labelsize=LARGE_XTICK_SIZE)
     ax.set_xlim(-0.6, len(tolerances) - 0.4)
     # Tint each y-axis (label, ticks, spine) to match its color family, so
     # which side a curve belongs to is legible from the axis alone, not just
@@ -657,7 +639,7 @@ def main():
         ax_err.set_ylim(*args.err_ylim)
     elif error_vals:
         ax_err.set_ylim(min(error_vals) / 8.0, max(error_vals) * 8.0)
-    ax_err.tick_params(axis="y", labelsize=13, colors=RIGHT_AXIS_COLOR)
+    ax_err.tick_params(axis="y", labelsize=13 * scale, colors=RIGHT_AXIS_COLOR)
     ax_err.spines["right"].set_color(RIGHT_AXIS_COLOR)
     ax_err.spines["left"].set_visible(False)
 
@@ -672,7 +654,7 @@ def main():
         labels.append("not converged")
         if ax_it is not None and iters_noconv:
             handles.append(Line2D([], [], linestyle="none", marker="x",
-                                  markersize=9, markeredgewidth=2.0,
+                                  markersize=9 * scale, markeredgewidth=2.0,
                                   color=NOCONV_COLOR))
             labels.append("not converged (iters)")
     ncol = 2 if len(handles) <= 4 else 3
@@ -681,10 +663,8 @@ def main():
               columnspacing=1.4, handlelength=2.6)
     if args.title:
         n_rows = math.ceil(len(handles) / ncol)
-        ax.set_title(args.title, pad=14 + 20 * n_rows)
+        ax.set_title(args.title, pad=(14 + 20 * n_rows) * scale)
 
-    out_path = Path(args.output) if args.output else (
-        Path(args.results_dir) / f"{bench}_speedup_error_vs_tolerance.png")
     if ax_it is None:
         fig.tight_layout()
     fig.savefig(out_path, dpi=args.dpi, bbox_inches="tight")
@@ -731,6 +711,94 @@ def main():
     if any(noconv.values()):
         print("  (* = AMP GMRES did not converge)")
     print(f"\nSaved plot to {out_path}")
+
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Plot AMP speedup and relative error vs AMP tolerance "
+                    "for every SpMV / FGS / GMRES benchmark found in the "
+                    "results directory, one figure per benchmark.")
+    parser.add_argument(
+        "results_dir", nargs="?", default="results",
+        help="Directory holding the sweep results (searched recursively).")
+    parser.add_argument(
+        "--base-format", default=None, choices=["ell", "csr"],
+        help="Which base format to plot; required only if a benchmark's "
+             "results mix both.")
+    parser.add_argument(
+        "--strategies", default=None,
+        help="Comma separated strategy order, e.g. "
+             "monolithic_classical,independent_buckets. "
+             "Default: all found, monolithic first.")
+    parser.add_argument(
+        "--no-fp16", action="store_true",
+        help="Drop the FP16 speedup and error lines even if the runs have them.")
+    parser.add_argument(
+        "--no-labels", action="store_true",
+        help="Do not print the speedup value on top of each bar.")
+    parser.add_argument(
+        "--per-strategy-error", action="store_true",
+        help="Draw one AMP error curve per strategy instead of a single "
+             "averaged curve (use to check that they really do coincide). "
+             "The GMRES iteration panel always shows AMP monolithic only.")
+    parser.add_argument(
+        "--no-iters", action="store_true",
+        help="GMRES: omit the iteration-count panel.")
+    parser.add_argument(
+        "--title", default=None, help="Optional figure title.")
+    parser.add_argument(
+        "--ymax", type=float, default=None,
+        help="Force the speedup (left) axis maximum.")
+    parser.add_argument(
+        "--err-ylim", nargs=2, type=float, default=None, metavar=("LO", "HI"),
+        help="Force the error (right) axis limits, e.g. --err-ylim 1e-16 1e-1.")
+    parser.add_argument(
+        "-o", "--output", "--output-prefix", default=None, metavar="PREFIX",
+        help="Output file prefix: each benchmark's figure is written to "
+             "<PREFIX>-<bench>.png, e.g. '-o figs/random' gives "
+             "figs/random-spmv.png, figs/random-fgs.png and "
+             "figs/random-gmres.png (default PREFIX: "
+             "<results-dir>/speedup_error_vs_tolerance).")
+    parser.add_argument(
+        "--large-text", action="store_true",
+        help="Thicker bars, a taller figure and larger text and markers (for "
+             "slides or small figures); the default layout is unchanged "
+             "without it.")
+    parser.add_argument("--dpi", type=int, default=400)
+    args = parser.parse_args()
+    layout = apply_layout(args.large_text)
+
+    all_runs = load_runs(args.results_dir)
+    if not all_runs:
+        raise SystemExit(f"No SpMV/FGS/GMRES result JSON found under "
+                         f"{args.results_dir}")
+
+    # One independent set of runs per benchmark found, in BENCHES order.
+    per_bench = {}
+    for bench in BENCHES:
+        runs = [r for r in all_runs if r["bench"] == bench]
+        if not runs:
+            continue
+        formats = sorted({r["base_format"] for r in runs})
+        if args.base_format:
+            runs = [r for r in runs if r["base_format"] == args.base_format]
+            if not runs:
+                print(f"  skipping {bench}: no runs with base format "
+                      f"'{args.base_format}' (found: {', '.join(formats)})")
+                continue
+        elif len(formats) > 1:
+            raise SystemExit(f"{bench} results mix base formats "
+                             f"({', '.join(formats)}); pass --base-format.")
+        per_bench[bench] = runs
+    if not per_bench:
+        raise SystemExit(f"No runs with base format '{args.base_format}' "
+                         f"under {args.results_dir}")
+    print(f"Benchmarks found: {', '.join(per_bench)}")
+
+    for bench, runs in per_bench.items():
+        out_path = output_path(args, bench)
+        plot_bench(runs, args, layout, out_path)
 
 
 if __name__ == "__main__":

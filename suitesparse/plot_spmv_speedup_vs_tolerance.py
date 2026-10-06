@@ -54,14 +54,36 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 from matplotlib.lines import Line2D  # noqa: E402
 
-plt.rcParams.update({
+BASE_RCPARAMS = {
     "font.size": 15,
     "axes.labelsize": 16,
     "axes.titlesize": 16,
     "xtick.labelsize": 14,
     "ytick.labelsize": 15,
     "legend.fontsize": 13,
-})
+}
+plt.rcParams.update(BASE_RCPARAMS)
+
+# --large-text: thicker bars, a taller figure and bigger text and markers. All text sizes
+# (the rcParams above, the explicit font sizes and the marker sizes) are multiplied by
+# LARGE_TEXT_SCALE; the figure gets LARGE_BAR_WIDTH_FACTOR times more width
+# per bar, bars fill LARGE_GROUP_FILL of the spacing between matrices, and the
+# figure is LARGE_HEIGHT_FACTOR times taller.
+LARGE_TEXT_SCALE = 1.4
+LARGE_GROUP_FILL = 0.92
+LARGE_BAR_WIDTH_FACTOR = 1.6
+LARGE_HEIGHT_FACTOR = 1.75
+
+
+def apply_layout(large_text):
+    """Returns (text_scale, group_fill, inches_per_bar, height_factor) and, for
+    --large-text, scales the matplotlib font rcParams."""
+    if not large_text:
+        return 1.0, GROUP_FILL, INCHES_PER_BAR, 1.0
+    plt.rcParams.update({k: v * LARGE_TEXT_SCALE
+                         for k, v in BASE_RCPARAMS.items()})
+    return (LARGE_TEXT_SCALE, LARGE_GROUP_FILL,
+            INCHES_PER_BAR * LARGE_BAR_WIDTH_FACTOR, LARGE_HEIGHT_FACTOR)
 
 # Colour-blind safe palette, one colour per tolerance (cycles if there are
 # more tolerances than colours).
@@ -236,11 +258,17 @@ def main():
         help="Overlay relative-error markers (max_relative_norm2, right "
              "axis); on by default, --no-show-error turns them off.")
     parser.add_argument(
+        "--large-text", action="store_true",
+        help="Thicker bars, a taller figure and larger text (for slides or "
+             "small figures); the default layout is unchanged without it.")
+    parser.add_argument(
         "--output", default=None,
         help="Output image path (default: <results-dir>/"
              "spmv_speedup_vs_double_<base-format>_<amp-format>.png).")
     parser.add_argument("--dpi", type=int, default=400)
     args = parser.parse_args()
+    scale, group_fill, inches_per_bar, height_factor = \
+        apply_layout(args.large_text)
 
     results_dir = Path(args.results_dir)
     double_dir = results_dir / args.double_dir
@@ -307,11 +335,11 @@ def main():
 
     x = np.arange(len(matrices), dtype=float)
     n_ser = len(series)
-    width = GROUP_FILL / n_ser
+    width = group_fill / n_ser
 
-    fig_w = max(7.0, len(matrices) * (INCHES_PER_BAR * n_ser
+    fig_w = max(7.0, len(matrices) * (inches_per_bar * n_ser
                                     + INCHES_GROUP_PAD))
-    fig, ax = plt.subplots(figsize=(fig_w, 5.5))
+    fig, ax = plt.subplots(figsize=(fig_w, 5.5 * height_factor))
     ax2 = ax.twinx() if have_errors else None
 
     all_vals = []
@@ -342,12 +370,12 @@ def main():
                 edgecolor="black", linewidth=0.6, zorder=3,
                 hatch="//" if is_single else None)
             if not args.no_labels:
-                ax.bar_label(bars, fmt="%.2f", fontsize=12, padding=2,
+                ax.bar_label(bars, fmt="%.2f", fontsize=12 * scale, padding=2,
                              rotation=90 if len(matrices) * n_ser > 10
                              else 0)
         if ax2 is not None and err_vals:
             ax2.plot(err_positions, err_vals, linestyle="none", marker="D",
-                     markersize=7, markerfacecolor=color,
+                     markersize=7 * scale, markerfacecolor=color,
                      markeredgecolor="black", markeredgewidth=0.6, zorder=5)
 
     ax.axhline(1.0, color="0.55", linewidth=1.0, linestyle="--", zorder=2)
@@ -364,7 +392,7 @@ def main():
     if ax2 is not None:
         ax2.set_yscale("log")
         ax2.set_ylabel("Relative error vs. FP64")
-        proxy = Line2D([0], [0], linestyle="none", marker="D", markersize=7,
+        proxy = Line2D([0], [0], linestyle="none", marker="D", markersize=7 * scale,
                        markerfacecolor="0.75", markeredgecolor="black",
                        markeredgewidth=0.6,
                        label="relative error (right axis)")
@@ -383,7 +411,7 @@ def main():
                                % round(math.log10(FP32_EXPECTED_ERROR)))
             handles.append(ref)
             labels.append(ref.get_label())
-    ax.legend(handles, labels, title=f"{amp_label} tolerance / FP32",
+    ax.legend(handles, labels,
               ncol=len(handles), loc="lower center",
               bbox_to_anchor=(0.5, 1.02), framealpha=0.9)
 

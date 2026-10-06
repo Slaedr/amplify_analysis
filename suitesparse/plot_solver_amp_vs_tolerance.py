@@ -67,14 +67,36 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 from matplotlib.lines import Line2D  # noqa: E402
 
-plt.rcParams.update({
+BASE_RCPARAMS = {
     "font.size": 15,
     "axes.labelsize": 16,
     "axes.titlesize": 16,
     "xtick.labelsize": 14,
     "ytick.labelsize": 15,
     "legend.fontsize": 13,
-})
+}
+plt.rcParams.update(BASE_RCPARAMS)
+
+# --large-text: thicker bars, a taller figure and bigger text and markers. All text sizes
+# (the rcParams above, the explicit font sizes and the marker sizes) are multiplied by
+# LARGE_TEXT_SCALE; the figure gets LARGE_BAR_WIDTH_FACTOR times more width
+# per bar, bars fill LARGE_GROUP_FILL of the spacing between matrices, and the
+# figure is LARGE_HEIGHT_FACTOR times taller.
+LARGE_TEXT_SCALE = 1.4
+LARGE_GROUP_FILL = 0.92
+LARGE_BAR_WIDTH_FACTOR = 1.6
+LARGE_HEIGHT_FACTOR = 1.7
+
+
+def apply_layout(large_text):
+    """Returns (text_scale, group_fill, inches_per_bar, height_factor) and, for
+    --large-text, scales the matplotlib font rcParams."""
+    if not large_text:
+        return 1.0, GROUP_FILL, INCHES_PER_BAR, 1.0
+    plt.rcParams.update({k: v * LARGE_TEXT_SCALE
+                         for k, v in BASE_RCPARAMS.items()})
+    return (LARGE_TEXT_SCALE, LARGE_GROUP_FILL,
+            INCHES_PER_BAR * LARGE_BAR_WIDTH_FACTOR, LARGE_HEIGHT_FACTOR)
 
 # Colour-blind safe palette, one colour per tolerance (cycles if there are
 # more tolerances than colours) -- same as plot_spmv_speedup_vs_tolerance.py.
@@ -284,11 +306,12 @@ def variant_short(variant):
 
 
 def plot_iterations_residual(records, matrices, variants, base_label,
-                             amp_label, args, out_path):
+                             amp_label, args, out_path, layout):
     """Second figure: solver iterations (bars, left axis) and final true
     relative residual (diamonds, log right axis) per matrix and variant, with
     the same-job FP64 baseline as a tick (iterations) / hollow diamond
     (residual)."""
+    scale, group_fill, inches_per_bar, height_factor = layout
     iters, iters_base, res, res_base = (defaultdict(list) for _ in range(4))
     not_converged = set()
     for r in records:
@@ -313,10 +336,10 @@ def plot_iterations_residual(records, matrices, variants, base_label,
 
     x = np.arange(len(matrices), dtype=float)
     n_var = len(variants)
-    width = GROUP_FILL / n_var
-    fig_w = max(7.0, len(matrices) * (INCHES_PER_BAR * n_var
+    width = group_fill / n_var
+    fig_w = max(7.0, len(matrices) * (inches_per_bar * n_var
                                     + INCHES_GROUP_PAD))
-    fig, ax = plt.subplots(figsize=(fig_w, 6.0))
+    fig, ax = plt.subplots(figsize=(fig_w, 6.0 * height_factor))
     ax2 = ax.twinx()
 
     tol_index = 0
@@ -354,7 +377,7 @@ def plot_iterations_residual(records, matrices, variants, base_label,
                           color=color, hatch=hatch, edgecolor="black",
                           linewidth=0.6, zorder=3, alpha=0.55)
             if not args.no_labels:
-                ax.bar_label(bars, labels=texts, fontsize=9, padding=2,
+                ax.bar_label(bars, labels=texts, fontsize=9 * scale, padding=2,
                              rotation=90 if len(matrices) * n_var > 10
                              else 0)
         if base_vals and not args.no_baseline:
@@ -363,11 +386,11 @@ def plot_iterations_residual(records, matrices, variants, base_label,
                       linewidth=2.2, zorder=4)
         if r_vals:
             ax2.plot(r_pos, r_vals, linestyle="none", marker="D",
-                     markersize=7, markerfacecolor="black",
+                     markersize=7 * scale, markerfacecolor="black",
                      markeredgecolor="white", markeredgewidth=0.8, zorder=6)
         if rb_vals and not args.no_baseline:
             ax2.plot(rb_pos, rb_vals, linestyle="none", marker="o",
-                     markersize=6, markerfacecolor="none",
+                     markersize=6 * scale, markerfacecolor="none",
                      markeredgecolor="black", markeredgewidth=1.3, zorder=6)
 
     all_iters = list(iters.values()) + list(iters_base.values())
@@ -394,14 +417,14 @@ def plot_iterations_residual(records, matrices, variants, base_label,
 
     handles, labels = ax.get_legend_handles_labels()
     handles.append(Line2D([0], [0], linestyle="none", marker="D",
-                          markersize=7, markerfacecolor="black",
+                          markersize=7 * scale, markerfacecolor="black",
                           markeredgecolor="white", markeredgewidth=0.8))
     labels.append("final relative residual (right axis)")
     if not args.no_baseline:
         handles.append(Line2D([0], [0], color="black", linewidth=2.2))
         labels.append(f"{base_label}<double> iterations")
         handles.append(Line2D([0], [0], linestyle="none", marker="o",
-                              markersize=6, markerfacecolor="none",
+                              markersize=6 * scale, markerfacecolor="none",
                               markeredgecolor="black", markeredgewidth=1.3))
         labels.append(f"{base_label}<double> residual")
     ncol = min(len(handles), 4) if len(handles) > 6 else len(handles)
@@ -411,8 +434,8 @@ def plot_iterations_residual(records, matrices, variants, base_label,
     if not_converged and not args.no_labels:
         ax.annotate("* hit the iteration cap without converging",
                     xy=(1.0, -0.02), xycoords="axes fraction", ha="right",
-                    va="top", fontsize=11, color="0.3",
-                    xytext=(0, -56), textcoords="offset points")
+                    va="top", fontsize=11 * scale, color="0.3",
+                    xytext=(0, -56 * scale), textcoords="offset points")
 
     fig.tight_layout()
     if args.title:
@@ -501,8 +524,14 @@ def main():
     parser.add_argument(
         "--linear-iters", action="store_true",
         help="Linear instead of logarithmic iterations axis.")
+    parser.add_argument(
+        "--large-text", action="store_true",
+        help="Thicker bars, a taller figure and larger text (for slides or "
+             "small figures); the default layout is unchanged without it.")
     parser.add_argument("--dpi", type=int, default=400)
     args = parser.parse_args()
+    scale, group_fill, inches_per_bar, height_factor = \
+        apply_layout(args.large_text)
 
     if not Path(args.results_dir).is_dir():
         raise SystemExit(f"--results-dir '{args.results_dir}' is not a "
@@ -581,10 +610,10 @@ def main():
 
     x = np.arange(len(matrices), dtype=float)
     n_var = len(variants)
-    width = GROUP_FILL / n_var
-    fig_w = max(7.0, len(matrices) * (INCHES_PER_BAR * n_var
+    width = group_fill / n_var
+    fig_w = max(7.0, len(matrices) * (inches_per_bar * n_var
                                     + INCHES_GROUP_PAD))
-    fig, ax = plt.subplots(figsize=(fig_w, 5.5))
+    fig, ax = plt.subplots(figsize=(fig_w, 5.5 * height_factor))
     ax2 = ax.twinx() if have_errors else None
 
     nonzero_errors = [e for e in error.values() if e and e > 0]
@@ -623,18 +652,18 @@ def main():
                           color=color, hatch=hatch, edgecolor="black",
                           linewidth=0.6, zorder=3)
             if not args.no_labels:
-                ax.bar_label(bars, labels=bar_texts, fontsize=9, padding=2,
+                ax.bar_label(bars, labels=bar_texts, fontsize=9 * scale, padding=2,
                              rotation=90 if len(matrices) * n_var > 10
                              else 0)
         if ax2 is not None:
             if err_vals:
                 ax2.plot(err_pos, err_vals, linestyle="none", marker="D",
-                         markersize=7, markerfacecolor=color,
+                         markersize=7 * scale, markerfacecolor=color,
                          markeredgecolor="black", markeredgewidth=0.6,
                          zorder=5)
             if zero_pos:
                 ax2.plot(zero_pos, [zero_floor] * len(zero_pos),
-                         linestyle="none", marker="v", markersize=8,
+                         linestyle="none", marker="v", markersize=8 * scale,
                          markerfacecolor=color, markeredgecolor="black",
                          markeredgewidth=0.6, zorder=5)
 
@@ -656,14 +685,14 @@ def main():
         ax2.set_yscale("log")
         ax2.set_ylabel(f"relative error vs {base_label}<double>")
         marker_proxy = Line2D(
-            [0], [0], linestyle="none", marker="D", markersize=7,
+            [0], [0], linestyle="none", marker="D", markersize=7 * scale,
             markerfacecolor="0.75", markeredgecolor="black",
             markeredgewidth=0.6, label="relative error (right axis)")
         handles.append(marker_proxy)
         labels.append(marker_proxy.get_label())
         if have_zero_errors:
             zero_proxy = Line2D(
-                [0], [0], linestyle="none", marker="v", markersize=8,
+                [0], [0], linestyle="none", marker="v", markersize=8 * scale,
                 markerfacecolor="0.75", markeredgecolor="black",
                 markeredgewidth=0.6, label="error = 0 (at axis floor)")
             handles.append(zero_proxy)
@@ -680,8 +709,8 @@ def main():
         ax.annotate(f"* did not converge (the {base_label}<double> "
                     f"baseline did)", xy=(1.0, -0.02),
                     xycoords="axes fraction", ha="right", va="top",
-                    fontsize=11, color="0.3",
-                    xytext=(0, -56), textcoords="offset points")
+                    fontsize=11 * scale, color="0.3",
+                    xytext=(0, -56 * scale), textcoords="offset points")
 
     fig.tight_layout()
     if args.title:
@@ -744,8 +773,10 @@ def main():
             Path(args.results_dir) /
             f"{stem}_iterations_residual_{base_format.replace('/', '-')}"
             f"_by_tolerance.png")
-        plot_iterations_residual(records, matrices, variants, base_label,
-                                 amp_label, args, iters_path)
+        plot_iterations_residual(
+            records, matrices, variants, base_label, amp_label, args,
+            iters_path,
+            (scale, group_fill, inches_per_bar, height_factor))
 
 
 if __name__ == "__main__":
