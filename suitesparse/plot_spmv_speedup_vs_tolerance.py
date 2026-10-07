@@ -205,7 +205,9 @@ def load_amp_records(results_dir, double, base_format, amp_format, tol_glob):
     return records
 
 
-SINGLE_COLOR = "#7f7f7f"
+# Same grey and hatch as plot_solver_amp_vs_tolerance.py.
+SINGLE_COLOR = "#8c8c8c"
+SINGLE_HATCH = "//"
 
 
 def fmt_tol(tol):
@@ -322,8 +324,10 @@ def main():
 
     matrices = sorted({m for m, _ in by_key})
     tolerances = sorted({t for _, t in by_key if t != "single"}, reverse=True)
-    series = list(tolerances) + (
-        ["single"] if any(k[1] == "single" for k in by_key) else [])
+    # FP32 first (leftmost bar of each group), then the tolerances from
+    # loosest to tightest -- same order as plot_solver_amp_vs_tolerance.py.
+    series = (["single"] if any(k[1] == "single" for k in by_key) else []) \
+        + list(tolerances)
     have_errors = bool(err_by_key) and args.show_error
     if args.show_error and not err_by_key:
         print("  note: no max_relative_norm2 found in any result; skipping "
@@ -343,11 +347,17 @@ def main():
     ax2 = ax.twinx() if have_errors else None
 
     all_vals = []
+    tol_index = 0
     for i, ser in enumerate(series):
         offset = (i - (n_ser - 1) / 2) * width
         is_single = ser == "single"
-        color = SINGLE_COLOR if is_single else \
-            TOLERANCE_COLORS[i % len(TOLERANCE_COLORS)]
+        if is_single:
+            color = SINGLE_COLOR
+        else:
+            # Index among the tolerances only, so FP32 being first does not
+            # shift their colours.
+            color = TOLERANCE_COLORS[tol_index % len(TOLERANCE_COLORS)]
+            tol_index += 1
         if is_single:
             label = "FP32"
         else:
@@ -368,7 +378,7 @@ def main():
             bars = ax.bar(
                 positions, vals, width, label=label, color=color,
                 edgecolor="black", linewidth=0.6, zorder=3,
-                hatch="//" if is_single else None)
+                hatch=SINGLE_HATCH if is_single else None)
             if not args.no_labels:
                 ax.bar_label(bars, fmt="%.2f", fontsize=12 * scale, padding=2,
                              rotation=90 if len(matrices) * n_ser > 10
