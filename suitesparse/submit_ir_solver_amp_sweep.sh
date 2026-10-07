@@ -509,6 +509,7 @@ PY
         [ -n "${SLURM_QOS}" ] && echo "#SBATCH -q ${SLURM_QOS}"
         echo "#SBATCH -t ${SLURM_TIME}"
         echo "#SBATCH -N ${SLURM_NODES}"
+        echo "#SBATCH -n 1"
         echo "#SBATCH --gpus-per-task=1"
         echo "#SBATCH -o ${vdir}/slurm-%j.out"
         echo ""
