@@ -53,6 +53,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 from matplotlib.lines import Line2D  # noqa: E402
+from matplotlib.transforms import blended_transform_factory  # noqa: E402
 
 BASE_RCPARAMS = {
     "font.size": 15,
@@ -60,7 +61,7 @@ BASE_RCPARAMS = {
     "axes.titlesize": 16,
     "xtick.labelsize": 14,
     "ytick.labelsize": 15,
-    "legend.fontsize": 13,
+    "legend.fontsize": 16,
 }
 plt.rcParams.update(BASE_RCPARAMS)
 
@@ -69,7 +70,7 @@ plt.rcParams.update(BASE_RCPARAMS)
 # LARGE_TEXT_SCALE; the figure gets LARGE_BAR_WIDTH_FACTOR times more width
 # per bar, bars fill LARGE_GROUP_FILL of the spacing between matrices, and the
 # figure is LARGE_HEIGHT_FACTOR times taller.
-LARGE_TEXT_SCALE = 1.4
+LARGE_TEXT_SCALE = 1.6
 LARGE_GROUP_FILL = 0.92
 LARGE_BAR_WIDTH_FACTOR = 1.6
 LARGE_HEIGHT_FACTOR = 1.75
@@ -104,6 +105,27 @@ FP32_EXPECTED_ERROR = 1e-7
 GROUP_FILL = 0.82
 INCHES_PER_BAR = 0.36
 INCHES_GROUP_PAD = 0.2
+
+
+def add_fitted_legend(fig, ax, handles, labels, **kwargs):
+    """Legend centred above the axes (and on the figure), wrapped onto as few
+    rows as it takes to be no wider than the figure, so it never sticks out
+    past the axis labels. Extra keyword arguments go to ``ax.legend``."""
+    anchor = dict(
+        loc="lower center", bbox_to_anchor=(0.5, 1.02), framealpha=0.9,
+        bbox_transform=blended_transform_factory(fig.transFigure,
+                                                 ax.transAxes))
+    anchor.update(kwargs)
+    renderer = fig.canvas.get_renderer()
+    max_width = 0.98 * fig.get_figwidth() * fig.dpi
+    legend = None
+    for ncol in range(len(handles), 0, -1):
+        if legend is not None:
+            legend.remove()
+        legend = ax.legend(handles, labels, ncol=ncol, **anchor)
+        if legend.get_window_extent(renderer).width <= max_width:
+            break
+    return legend
 
 
 def guess_tolerance_from_dirname(tol_dir_name):
@@ -410,20 +432,18 @@ def main():
         labels.append(proxy.get_label())
         if "single" in series:
             ax2.axhline(FP32_EXPECTED_ERROR, color="0.55", linewidth=1.0,
-                        linestyle="--", alpha=0.6, zorder=1)
+                        linestyle="--", zorder=1)
             # axhline does not autoscale: keep the line inside the axis.
             lo, hi = ax2.get_ylim()
             ax2.set_ylim(min(lo, FP32_EXPECTED_ERROR / 3.0),
                          max(hi, FP32_EXPECTED_ERROR * 3.0))
             ref = Line2D([0], [0], color="0.55", linewidth=1.0,
-                         linestyle="--", alpha=0.6,
+                         linestyle="--",
                          label="FP32 error level (1e%d)"
                                % round(math.log10(FP32_EXPECTED_ERROR)))
             handles.append(ref)
             labels.append(ref.get_label())
-    ax.legend(handles, labels,
-              ncol=len(handles), loc="lower center",
-              bbox_to_anchor=(0.5, 1.02), framealpha=0.9)
+    add_fitted_legend(fig, ax, handles, labels)
 
     fig.tight_layout()
     out_path = Path(args.output) if args.output else (

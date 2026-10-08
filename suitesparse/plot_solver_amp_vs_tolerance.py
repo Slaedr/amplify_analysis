@@ -66,6 +66,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 from matplotlib.lines import Line2D  # noqa: E402
+from matplotlib.transforms import blended_transform_factory  # noqa: E402
 
 BASE_RCPARAMS = {
     "font.size": 15,
@@ -73,7 +74,8 @@ BASE_RCPARAMS = {
     "axes.titlesize": 16,
     "xtick.labelsize": 14,
     "ytick.labelsize": 15,
-    "legend.fontsize": 13,
+    "legend.fontsize": 16,
+    "legend.title_fontsize": 16,
 }
 plt.rcParams.update(BASE_RCPARAMS)
 
@@ -118,6 +120,27 @@ GROUP_FILL = 0.82
 INCHES_PER_BAR = 0.36
 INCHES_GROUP_PAD = 0.2
 TOL_DIR_RE = re.compile(r"tol_([0-9.eE+-]+)")
+
+
+def add_fitted_legend(fig, ax, handles, labels, **kwargs):
+    """Legend centred above the axes (and on the figure), wrapped onto as few
+    rows as it takes to be no wider than the figure, so it never sticks out
+    past the axis labels. Extra keyword arguments go to ``ax.legend``."""
+    anchor = dict(
+        loc="lower center", bbox_to_anchor=(0.5, 1.02), framealpha=0.9,
+        bbox_transform=blended_transform_factory(fig.transFigure,
+                                                 ax.transAxes))
+    anchor.update(kwargs)
+    renderer = fig.canvas.get_renderer()
+    max_width = 0.98 * fig.get_figwidth() * fig.dpi
+    legend = None
+    for ncol in range(len(handles), 0, -1):
+        if legend is not None:
+            legend.remove()
+        legend = ax.legend(handles, labels, ncol=ncol, **anchor)
+        if legend.get_window_extent(renderer).width <= max_width:
+            break
+    return legend
 
 
 def merged_config(data, which):
@@ -427,10 +450,8 @@ def plot_iterations_residual(records, matrices, variants, base_label,
                               markersize=6 * scale, markerfacecolor="none",
                               markeredgecolor="black", markeredgewidth=1.3))
         labels.append(f"{base_label}<double> residual")
-    ncol = min(len(handles), 4) if len(handles) > 6 else len(handles)
-    legend = ax.legend(handles, labels, title=f"{amp_label} tolerance",
-                       ncol=ncol, loc="lower center",
-                       bbox_to_anchor=(0.5, 1.02), framealpha=0.9)
+    legend = add_fitted_legend(fig, ax, handles, labels,
+                               title=f"{amp_label} tolerance")
     if not_converged and not args.no_labels:
         ax.annotate("* hit the iteration cap without converging",
                     xy=(1.0, -0.02), xycoords="axes fraction", ha="right",
@@ -700,10 +721,8 @@ def main():
     # Placed above the axes rather than in a corner: the error markers can
     # land anywhere vertically (their own log-scaled axis), so no inside
     # corner is reliably free of data.
-    ncol = min(len(handles), 4) if len(handles) > 6 else len(handles)
-    legend = ax.legend(handles, labels, title=f"{amp_label} tolerance",
-                       ncol=ncol, loc="lower center",
-                       bbox_to_anchor=(0.5, 1.02), framealpha=0.9)
+    legend = add_fitted_legend(fig, ax, handles, labels,
+                               title=f"{amp_label} tolerance")
 
     if lost_convergence and not args.no_labels:
         ax.annotate(f"* did not converge (the {base_label}<double> "

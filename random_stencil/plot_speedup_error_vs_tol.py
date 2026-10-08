@@ -65,6 +65,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 from matplotlib.lines import Line2D  # noqa: E402
 from matplotlib.patches import Patch  # noqa: E402
+from matplotlib.transforms import blended_transform_factory  # noqa: E402
 
 BASE_RCPARAMS = {
     "font.size": 15,
@@ -72,7 +73,7 @@ BASE_RCPARAMS = {
     "axes.titlesize": 16,
     "xtick.labelsize": 14,
     "ytick.labelsize": 15,
-    "legend.fontsize": 12,
+    "legend.fontsize": 16,
 }
 plt.rcParams.update(BASE_RCPARAMS)
 
@@ -90,6 +91,10 @@ LARGE_HEIGHT_FACTOR = 1.75
 # With --large-text the speedup value on top of each bar and the tolerance
 # labels on the x axis are emphasised beyond the general scale-up (font
 # sizes in points; the defaults are 10 and 14, see BASE_RCPARAMS).
+# Line widths, marker sizes and marker edge widths of the speedup lines and
+# error/iteration curves are multiplied by this (bars, grid and the y = 1
+# reference are not).
+CURVE_SCALE = 1.2
 LARGE_BAR_LABEL_SIZE = 18
 LARGE_XTICK_SIZE = 22
 
@@ -126,7 +131,7 @@ NOCONV_COLOR = "#e41a1c"     # red crosses for non-converged GMRES runs
 
 PRETTY_STRATEGY = {
     "monolithic_classical": "AMP monolithic",
-    "independent_buckets": "AMP independent buckets",
+    "independent_buckets": "AMP independent",
 }
 
 # Per-benchmark description of the result JSON.
@@ -156,6 +161,28 @@ BENCHES = {
         "iterative": True,
     },
 }
+
+
+def add_fitted_legend(fig, ax, handles, labels, **kwargs):
+    """Legend horizontally centred on the figure, wrapped onto as few rows as
+    it takes to be no wider than the figure, so it never sticks out past the
+    axis labels. Extra keyword arguments go to ``ax.legend`` (``loc`` /
+    ``bbox_to_anchor`` are interpreted with x in figure and y in axes
+    coordinates of ``ax``). Returns (legend, number of columns)."""
+    opts = dict(loc="lower center", bbox_to_anchor=(0.5, 1.01),
+                bbox_transform=blended_transform_factory(fig.transFigure,
+                                                         ax.transAxes))
+    opts.update(kwargs)
+    renderer = fig.canvas.get_renderer()
+    max_width = 0.98 * fig.get_figwidth() * fig.dpi
+    legend = None
+    for ncol in range(len(handles), 0, -1):
+        if legend is not None:
+            legend.remove()
+        legend = ax.legend(handles, labels, ncol=ncol, **opts)
+        if legend.get_window_extent(renderer).width <= max_width:
+            break
+    return legend, ncol
 
 
 def find_row(rows, predicate):
@@ -452,13 +479,13 @@ def plot_bench(runs, args, layout, out_path):
             if pts:
                 speedup_vals += [v for _, v in pts]
                 ax.plot([p[0] for p in pts], [p[1] for p in pts],
-                        color=FP32_COLOR, linestyle="--", linewidth=2.0,
-                        marker="s", markersize=6 * scale, markerfacecolor="white",
-                        markeredgewidth=1.6, zorder=4,
+                        color=FP32_COLOR, linestyle="--", linewidth=2.0 * CURVE_SCALE,
+                        marker="s", markersize=6 * scale * CURVE_SCALE, markerfacecolor="white",
+                        markeredgewidth=1.6 * CURVE_SCALE, zorder=4,
                         label=f"speedup, {base_name}<float>")
         else:
             speedup_vals.append(fp32)
-            ax.axhline(fp32, color=FP32_COLOR, linestyle="--", linewidth=2.0,
+            ax.axhline(fp32, color=FP32_COLOR, linestyle="--", linewidth=2.0 * CURVE_SCALE,
                        zorder=4,
                        label=f"speedup, {base_name}<float>  ({fp32:.2f}x"
                              f"{nc(fp32_conv)})")
@@ -474,13 +501,13 @@ def plot_bench(runs, args, layout, out_path):
             if pts:
                 speedup_vals += [v for _, v in pts]
                 ax.plot([p[0] for p in pts], [p[1] for p in pts],
-                        color=FP16_COLOR, linestyle=":", linewidth=2.2,
-                        marker="^", markersize=7 * scale, markerfacecolor="white",
-                        markeredgewidth=1.6, zorder=4,
+                        color=FP16_COLOR, linestyle=":", linewidth=2.2 * CURVE_SCALE,
+                        marker="^", markersize=7 * scale * CURVE_SCALE, markerfacecolor="white",
+                        markeredgewidth=1.6 * CURVE_SCALE, zorder=4,
                         label=f"speedup, {base_name}<half>")
         else:
             speedup_vals.append(fp16)
-            ax.axhline(fp16, color=FP16_COLOR, linestyle=":", linewidth=2.2,
+            ax.axhline(fp16, color=FP16_COLOR, linestyle=":", linewidth=2.2 * CURVE_SCALE,
                        zorder=4,
                        label=f"speedup, {base_name}<half>  ({fp16:.2f}x"
                              f"{nc(fp16_conv)})")
@@ -499,9 +526,9 @@ def plot_bench(runs, args, layout, out_path):
                 continue
             error_vals += [e for _, e in pts]
             ax_err.plot([p[0] for p in pts], [p[1] for p in pts],
-                        color=AMP_ERR_COLOR, linestyle="-", linewidth=1.8,
-                        marker=markers[i % len(markers)], markersize=7 * scale,
-                        markerfacecolor="white", markeredgewidth=1.6,
+                        color=AMP_ERR_COLOR, linestyle="-", linewidth=1.8 * CURVE_SCALE,
+                        marker=markers[i % len(markers)], markersize=7 * scale * CURVE_SCALE,
+                        markerfacecolor="white", markeredgewidth=1.6 * CURVE_SCALE,
                         zorder=6,
                         label=f"error, {PRETTY_STRATEGY.get(strategy, strategy)}")
     else:
@@ -510,9 +537,9 @@ def plot_bench(runs, args, layout, out_path):
         if pts:
             error_vals += [e for _, e in pts]
             ax_err.plot([p[0] for p in pts], [p[1] for p in pts],
-                        color=AMP_ERR_COLOR, linestyle="-", linewidth=1.8,
-                        marker="o", markersize=7 * scale, markerfacecolor="white",
-                        markeredgewidth=1.6, zorder=6, label="error, AMP")
+                        color=AMP_ERR_COLOR, linestyle="-", linewidth=1.8 * CURVE_SCALE,
+                        marker="o", markersize=7 * scale * CURVE_SCALE, markerfacecolor="white",
+                        markeredgewidth=1.6 * CURVE_SCALE, zorder=6, label="error, AMP")
 
     def by_tol_points(d):
         pts = [(xi, d.get(tol)) for xi, tol in enumerate(tolerances)]
@@ -535,15 +562,15 @@ def plot_bench(runs, args, layout, out_path):
                 continue
             error_vals += [e for _, e in pts]
             ax_err.plot([p[0] for p in pts], [p[1] for p in pts],
-                        color=color, linestyle=ls, linewidth=1.8,
-                        marker=marker, markersize=ms * scale, markerfacecolor="white",
-                        markeredgewidth=1.5, zorder=5, label=label)
+                        color=color, linestyle=ls, linewidth=1.8 * CURVE_SCALE,
+                        marker=marker, markersize=ms * scale * CURVE_SCALE, markerfacecolor="white",
+                        markeredgewidth=1.5 * CURVE_SCALE, zorder=5, label=label)
         elif pooled:
             error_vals.append(pooled)
             ax_err.plot(x, np.full_like(x, pooled), color=color,
-                        linestyle=ls, linewidth=1.8, marker=marker,
-                        markersize=ms * scale, markevery=max(1, len(x) // 5),
-                        markerfacecolor="white", markeredgewidth=1.5,
+                        linestyle=ls, linewidth=1.8 * CURVE_SCALE, marker=marker,
+                        markersize=ms * scale * CURVE_SCALE, markevery=max(1, len(x) // 5),
+                        markerfacecolor="white", markeredgewidth=1.5 * CURVE_SCALE,
                         zorder=5, label=label)
 
     # ---- GMRES iteration panel ----------------------------------------------
@@ -554,15 +581,15 @@ def plot_bench(runs, args, layout, out_path):
         def plot_iters_curve(pts, color, marker, ls, label):
             nonlocal iters_noconv
             ax_it.plot([p[0] for p in pts], [p[1] for p in pts],
-                       color=color, linestyle=ls, linewidth=1.8,
-                       marker=marker, markersize=7 * scale, markerfacecolor="white",
-                       markeredgewidth=1.6, zorder=6, label=label)
+                       color=color, linestyle=ls, linewidth=1.8 * CURVE_SCALE,
+                       marker=marker, markersize=7 * scale * CURVE_SCALE, markerfacecolor="white",
+                       markeredgewidth=1.6 * CURVE_SCALE, zorder=6, label=label)
             bad = [p for p in pts if p[2]]
             if bad:
                 iters_noconv = True
                 ax_it.plot([p[0] for p in bad], [p[1] for p in bad],
-                           linestyle="none", marker="x", markersize=10 * scale,
-                           markeredgewidth=2.2, color=NOCONV_COLOR, zorder=7)
+                           linestyle="none", marker="x", markersize=10 * scale * CURVE_SCALE,
+                           markeredgewidth=2.2 * CURVE_SCALE, color=NOCONV_COLOR, zorder=7)
 
         pts = [(xi, amp_iters_by_tol[tol], amp_noconv_by_tol[tol])
                for xi, tol in enumerate(tolerances)
@@ -609,10 +636,10 @@ def plot_bench(runs, args, layout, out_path):
         ax_it.tick_params(axis="y", labelsize=13 * scale)
         # Legend below the panel, under the "AMP tolerance" label, so the
         # iteration panel keeps the full width of the speedup panel.
-        n_it = len(ax_it.get_legend_handles_labels()[0])
-        ax_it.legend(loc="upper center", bbox_to_anchor=(0.5, -0.42),
-                     ncol=min(max(n_it, 1), 4), frameon=False, fontsize=12 * scale,
-                     columnspacing=1.6, handlelength=2.4)
+        it_handles, it_labels = ax_it.get_legend_handles_labels()
+        add_fitted_legend(fig, ax_it, it_handles, it_labels,
+                          loc="upper center", bbox_to_anchor=(0.5, -0.42),
+                          frameon=False, columnspacing=1.6, handlelength=2.4)
 
     # ---- axes ---------------------------------------------------------------
     ax_x = ax_it if ax_it is not None else ax
@@ -654,13 +681,11 @@ def plot_bench(runs, args, layout, out_path):
         labels.append("not converged")
         if ax_it is not None and iters_noconv:
             handles.append(Line2D([], [], linestyle="none", marker="x",
-                                  markersize=9 * scale, markeredgewidth=2.0,
+                                  markersize=9 * scale * CURVE_SCALE, markeredgewidth=2.0 * CURVE_SCALE,
                                   color=NOCONV_COLOR))
             labels.append("not converged (iters)")
-    ncol = 2 if len(handles) <= 4 else 3
-    ax.legend(handles, labels, loc="lower center",
-              bbox_to_anchor=(0.5, 1.01), ncol=ncol, frameon=False,
-              columnspacing=1.4, handlelength=2.6)
+    _, ncol = add_fitted_legend(fig, ax, handles, labels, frameon=False,
+                                columnspacing=1.4, handlelength=2.6)
     if args.title:
         n_rows = math.ceil(len(handles) / ncol)
         ax.set_title(args.title, pad=(14 + 20 * n_rows) * scale)
