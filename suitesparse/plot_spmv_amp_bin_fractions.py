@@ -48,14 +48,15 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 from matplotlib.patches import Patch  # noqa: E402
 
-plt.rcParams.update({
+BASE_RCPARAMS = {
     "font.size": 15,
     "axes.labelsize": 16,
     "axes.titlesize": 16,
     "xtick.labelsize": 14,
     "ytick.labelsize": 15,
     "legend.fontsize": 13,
-})
+}
+plt.rcParams.update(BASE_RCPARAMS)
 
 # Same bin naming as plot_spmv_amp_bins.py.
 BIN_LABELS = {"bin_0": "FP64", "bin_1": "FP32", "bin_2": "BF16"}
@@ -71,6 +72,35 @@ OTHER_HATCH = "//"
 GROUP_FILL = 0.82
 INCHES_PER_BAR = 0.36
 INCHES_GROUP_PAD = 0.2
+
+# --large-text: thicker bars, a taller figure and bigger text. All text sizes
+# (the rcParams above and the explicit font sizes) are multiplied by
+# LARGE_TEXT_SCALE; the figure gets LARGE_BAR_WIDTH_FACTOR times more width
+# per bar, bars fill LARGE_GROUP_FILL of the spacing between matrices, and the
+# figure is LARGE_HEIGHT_FACTOR times taller.
+LARGE_TEXT_SCALE = 1.6
+LARGE_GROUP_FILL = 0.92
+LARGE_BAR_WIDTH_FACTOR = 1.6
+LARGE_HEIGHT_FACTOR = 1.75
+# Absolute font sizes of the in-bar percentages and the legend under
+# --large-text (the defaults are 8 pt and legend.fontsize / 13 pt).
+LARGE_BAR_LABEL_SIZE = 20
+LARGE_LEGEND_SIZE = 26
+LARGE_TOL_TICK_SIZE = 22      # tolerance labels under the bars (default 9 pt)
+LARGE_MATRIX_NAME_SIZE = 18   # matrix names under each group (default 14 pt)
+LARGE_MIN_FIG_WIDTH = 16.0
+
+
+def apply_layout(large_text):
+    """Returns (text_scale, group_fill, inches_per_bar, height_factor) and, for
+    --large-text, scales the matplotlib font rcParams."""
+    if not large_text:
+        return 1.0, GROUP_FILL, INCHES_PER_BAR, 1.0
+    plt.rcParams.update({k: v * LARGE_TEXT_SCALE
+                         for k, v in BASE_RCPARAMS.items()})
+    return (LARGE_TEXT_SCALE, LARGE_GROUP_FILL,
+            INCHES_PER_BAR * LARGE_BAR_WIDTH_FACTOR, LARGE_HEIGHT_FACTOR)
+
 
 TOL_DIR_RE = re.compile(r"tol_(\d+)")
 
@@ -161,13 +191,19 @@ def main():
         help="Do not print the segment percentages.")
     parser.add_argument("--title", default=None, help="Optional plot title.")
     parser.add_argument(
+        "--large-text", action="store_true",
+        help="Thicker bars, a taller figure and larger text (for slides or "
+             "small figures); the default layout is unchanged without it.")
+    parser.add_argument(
         "--output", default=None,
         help="Output image path (default: <results-dir>/"
              "spmv_amp_bin_fractions_<format>.png).")
     parser.add_argument("--dpi", type=int, default=400)
     args = parser.parse_args()
+    scale, group_fill, inches_per_bar, height_factor = \
+        apply_layout(args.large_text)
 
-    records = load_records(args.results_dir, args.amp_format, args.tol_glob)
+    records =load_records(args.results_dir, args.amp_format, args.tol_glob)
     if not records:
         print(f"No AMP bin data found under {args.results_dir}")
         raise SystemExit(1)
@@ -213,10 +249,13 @@ def main():
 
     n_tol = len(tolerances)
     # Bars of one matrix sit next to each other; groups are 1 unit apart.
-    bar_w = GROUP_FILL / n_tol
-    fig_w = max(8.0, len(matrices) * (INCHES_PER_BAR * n_tol
+    bar_w = group_fill / n_tol
+    # The enlarged legend sits above the axes in a single row; keep the figure
+    # at least as wide as it so tight_layout does not squeeze the bars.
+    fig_w = max(LARGE_MIN_FIG_WIDTH if args.large_text else 8.0,
+                len(matrices) * (inches_per_bar * n_tol
                                       + INCHES_GROUP_PAD))
-    fig, ax = plt.subplots(figsize=(fig_w, 6.0))
+    fig, ax = plt.subplots(figsize=(fig_w, 6.0 * height_factor))
 
     fallback = iter(FALLBACK_COLORS)
     colors = {}
@@ -245,7 +284,9 @@ def main():
                        edgecolor="black", linewidth=0.5, zorder=3)
                 if not args.no_labels and v >= 0.06:
                     ax.text(xpos, bottom + v / 2, f"{v * 100:.0f}",
-                            ha="center", va="center", fontsize=8,
+                            ha="center", va="center",
+                            fontsize=(LARGE_BAR_LABEL_SIZE if args.large_text
+                                      else 8),
                             color="black", zorder=4)
                 bottom += v
 
@@ -257,24 +298,31 @@ def main():
 
     # Two tick levels: tolerance under every bar, matrix name under the group.
     ax.set_xticks(tick_pos)
-    ax.set_xticklabels(tick_lab, rotation=90, fontsize=9)
+    tol_fs = LARGE_TOL_TICK_SIZE if args.large_text else 9
+    name_fs = LARGE_MATRIX_NAME_SIZE if args.large_text else 14
+    ax.set_xticklabels(tick_lab, rotation=90, fontsize=tol_fs)
     ax.tick_params(axis="x", length=2, pad=2)
     for c, matrix in zip(centres, matrices):
+        # Offset below the axes grows with the tolerance label size so the
+        # matrix name stays clear of the rotated tolerance labels.
         ax.annotate(matrix, xy=(c, 0), xycoords=("data", "axes fraction"),
-                    xytext=(0, -42), textcoords="offset points",
+                    xytext=(0, -(42 / 9) * tol_fs), textcoords="offset points",
                     ha="right", va="top", rotation=30,
-                    rotation_mode="anchor", fontsize=14)
+                    rotation_mode="anchor", fontsize=name_fs)
 
     handles = [Patch(facecolor=colors[k], edgecolor="black",
                      label=BIN_LABELS.get(k, k)) for k in bin_keys]
     if have_other:
         handles.append(Patch(facecolor=OTHER_COLOR, edgecolor="black",
                              hatch=OTHER_HATCH, label="dropped"))
+    legend_kw = ({"fontsize": LARGE_LEGEND_SIZE,
+                  "title_fontsize": LARGE_LEGEND_SIZE}
+                 if args.large_text else {})
     ax.legend(handles=handles, title=f"{args.amp_format.upper()} precision",
               ncol=len(handles), loc="lower center",
-              bbox_to_anchor=(0.5, 1.02), framealpha=0.9)
+              bbox_to_anchor=(0.5, 1.02), framealpha=0.9, **legend_kw)
     if args.title:
-        ax.set_title(args.title, pad=48)
+        ax.set_title(args.title, pad=48 * scale)
 
     fig.tight_layout()
     out_path = Path(args.output) if args.output else (

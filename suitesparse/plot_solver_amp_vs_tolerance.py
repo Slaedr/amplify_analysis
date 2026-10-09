@@ -71,7 +71,7 @@ from matplotlib.transforms import blended_transform_factory  # noqa: E402
 BASE_RCPARAMS = {
     "font.size": 15,
     "axes.labelsize": 16,
-    "axes.titlesize": 16,
+    "axes.titlesize": 12,
     "xtick.labelsize": 14,
     "ytick.labelsize": 15,
     "legend.fontsize": 16,
@@ -84,10 +84,13 @@ plt.rcParams.update(BASE_RCPARAMS)
 # LARGE_TEXT_SCALE; the figure gets LARGE_BAR_WIDTH_FACTOR times more width
 # per bar, bars fill LARGE_GROUP_FILL of the spacing between matrices, and the
 # figure is LARGE_HEIGHT_FACTOR times taller.
-LARGE_TEXT_SCALE = 1.4
+LARGE_TEXT_SCALE = 1.5
 LARGE_GROUP_FILL = 0.92
 LARGE_BAR_WIDTH_FACTOR = 1.6
 LARGE_HEIGHT_FACTOR = 1.7
+# Font size (pt) of the values printed above the bars under --large-text.
+# Without --large-text they are 9 pt.
+LARGE_BAR_LABEL_SIZE = 23
 
 
 def apply_layout(large_text):
@@ -400,7 +403,10 @@ def plot_iterations_residual(records, matrices, variants, base_label,
                           color=color, hatch=hatch, edgecolor="black",
                           linewidth=0.6, zorder=3, alpha=0.55)
             if not args.no_labels:
-                ax.bar_label(bars, labels=texts, fontsize=9 * scale, padding=2,
+                ax.bar_label(bars, labels=texts,
+                             fontsize=(LARGE_BAR_LABEL_SIZE if args.large_text
+                                       else 9),
+                             padding=2,
                              rotation=90 if len(matrices) * n_var > 10
                              else 0)
         if base_vals and not args.no_baseline:
@@ -450,8 +456,7 @@ def plot_iterations_residual(records, matrices, variants, base_label,
                               markersize=6 * scale, markerfacecolor="none",
                               markeredgecolor="black", markeredgewidth=1.3))
         labels.append(f"{base_label}<double> residual")
-    legend = add_fitted_legend(fig, ax, handles, labels,
-                               title=f"{amp_label} tolerance")
+    legend = add_fitted_legend(fig, ax, handles, labels)
     if not_converged and not args.no_labels:
         ax.annotate("* hit the iteration cap without converging",
                     xy=(1.0, -0.02), xycoords="axes fraction", ha="right",
@@ -673,7 +678,10 @@ def main():
                           color=color, hatch=hatch, edgecolor="black",
                           linewidth=0.6, zorder=3)
             if not args.no_labels:
-                ax.bar_label(bars, labels=bar_texts, fontsize=9 * scale, padding=2,
+                ax.bar_label(bars, labels=bar_texts,
+                             fontsize=(LARGE_BAR_LABEL_SIZE if args.large_text
+                                       else 9),
+                             padding=2,
                              rotation=90 if len(matrices) * n_var > 10
                              else 0)
         if ax2 is not None:
@@ -721,8 +729,7 @@ def main():
     # Placed above the axes rather than in a corner: the error markers can
     # land anywhere vertically (their own log-scaled axis), so no inside
     # corner is reliably free of data.
-    legend = add_fitted_legend(fig, ax, handles, labels,
-                               title=f"{amp_label} tolerance")
+    legend = add_fitted_legend(fig, ax, handles, labels)
 
     if lost_convergence and not args.no_labels:
         ax.annotate(f"* did not converge (the {base_label}<double> "

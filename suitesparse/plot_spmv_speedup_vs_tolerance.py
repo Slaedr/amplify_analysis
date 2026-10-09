@@ -70,10 +70,13 @@ plt.rcParams.update(BASE_RCPARAMS)
 # LARGE_TEXT_SCALE; the figure gets LARGE_BAR_WIDTH_FACTOR times more width
 # per bar, bars fill LARGE_GROUP_FILL of the spacing between matrices, and the
 # figure is LARGE_HEIGHT_FACTOR times taller.
-LARGE_TEXT_SCALE = 1.6
+LARGE_TEXT_SCALE = 1.8
 LARGE_GROUP_FILL = 0.92
 LARGE_BAR_WIDTH_FACTOR = 1.6
 LARGE_HEIGHT_FACTOR = 1.75
+# Font size (pt) of the speedup values printed above the bars under
+# --large-text. Without --large-text they are 12 pt.
+LARGE_BAR_LABEL_SIZE = 23
 
 
 def apply_layout(large_text):
@@ -402,7 +405,10 @@ def main():
                 edgecolor="black", linewidth=0.6, zorder=3,
                 hatch=SINGLE_HATCH if is_single else None)
             if not args.no_labels:
-                ax.bar_label(bars, fmt="%.2f", fontsize=12 * scale, padding=2,
+                ax.bar_label(bars, fmt="%.2f",
+                             fontsize=(LARGE_BAR_LABEL_SIZE if args.large_text
+                                       else 12),
+                             padding=2,
                              rotation=90 if len(matrices) * n_ser > 10
                              else 0)
         if ax2 is not None and err_vals:
